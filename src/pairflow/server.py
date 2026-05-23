@@ -10,6 +10,9 @@ Tier 2 (verification — most are async; talks to NR, MQTT, systemd):
   Trigger:  nr_inject
   Inspect:  nr_tail_debug, nr_journal
   MQTT:     mqtt_sub_collect, mqtt_pub
+
+Tier 3 (git workflow inside the Node-RED project directory):
+  git_status, git_diff, git_log, git_commit
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ from typing import Any
 
 from fastmcp import FastMCP
 
-from . import flows, mqtt, nr_admin, service, validate
+from . import flows, git_ops, mqtt, nr_admin, service, validate
 from .config import Config
 
 
@@ -212,6 +215,62 @@ def build_server(config: Config) -> FastMCP:
             payload=payload,
             retain=retain,
             qos=qos,
+        )
+
+    # ============================================================ #
+    # Tier 3 — git workflow                                          #
+    # ============================================================ #
+
+    def _project_dir():
+        pd = config.node_red.project_dir
+        if pd is None:
+            raise ValueError(
+                "No project_dir configured. Add [node_red].project_dir = \"...\" "
+                "to your pairflow config to enable git_* tools."
+            )
+        return pd
+
+    @mcp.tool
+    def git_status() -> dict[str, Any]:
+        """Parsed status of the Node-RED project's git repo.
+
+        Returns branch, ahead/behind counts, and a list of changed paths
+        with their two-character porcelain status code (e.g. " M" for
+        unstaged-modified, "M " for staged-modified, "??" for untracked).
+        """
+        return git_ops.status(_project_dir())
+
+    @mcp.tool
+    def git_diff(path: str | None = None, staged: bool = False) -> dict[str, Any]:
+        """Diff of the working tree (or the index, if `staged=True`).
+
+        `path`: restrict to a single file. Without a path, the full diff is
+        returned, which can be large for a multi-megabyte flows.json.
+        """
+        return git_ops.diff(_project_dir(), path=path, staged=staged)
+
+    @mcp.tool
+    def git_log(count: int = 10) -> dict[str, Any]:
+        """Recent commits in the project repo as structured records."""
+        return {"commits": git_ops.log(_project_dir(), count=count)}
+
+    @mcp.tool
+    def git_commit(
+        message: str,
+        paths: list[str] | None = None,
+        allow_empty: bool = False,
+    ) -> dict[str, Any]:
+        """Stage `paths` (if any) and commit them with `message`.
+
+        If `paths` is omitted, commits whatever is already staged. An empty
+        message is rejected. With `allow_empty=False` (default), a no-op
+        commit raises rather than silently succeeding.
+        """
+        return git_ops.commit(
+            _project_dir(),
+            message=message,
+            paths=paths,
+            allow_empty=allow_empty,
         )
 
     return mcp
