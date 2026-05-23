@@ -1,0 +1,34 @@
+# Example Pairflow configuration.
+#
+# Save this as ~/.config/pairflow/config.toml, or anywhere and point
+# pairflow at it with --config / $PAIRFLOW_CONFIG.
+
+[node_red]
+# Path to the active flows file. Required.
+flows_file  = "/home/pi/.node-red/flows.json"
+
+# Node-RED Admin API base URL. Used for read-only operations and (later)
+# triggering inject nodes and reading debug streams.
+admin_url   = "http://localhost:1880"
+
+# systemd unit name. Used (later) for restart-on-deploy.
+service     = "nodered"
+
+# Optional: path to the git-managed project directory containing flows.json.
+# Enables (later) git diff / status / commit tools.
+# project_dir = "/home/pi/.node-red/projects/my-project"
+
+
+# MQTT brokers. The broker named "default" is used when an MQTT tool
+# is called without an explicit broker= argument. Add as many additional
+# brokers as you need; tool calls reference them by their table name.
+[mqtt.default]
+host = "localhost"
+port = 1883
+
+# Example of a remote broker with credentials:
+# [mqtt.remote]
+# host         = "broker.example.tld"
+# port         = 1883
+# username     = "pairflow"
+# password_env = "PAIRFLOW_REMOTE_BROKER_PW"   # name of the env var, not the password
