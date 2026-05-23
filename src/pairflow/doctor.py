@@ -177,8 +177,13 @@ def smoke_exercise(flows_file: Path) -> str:
         flows.update_node(work, node["id"], {"name": "doctor-renamed"})
         lines.append("  nr_update_node:  ok")
 
-        # find some other node to wire to/from
-        other = next((n for n in flows.list_nodes(work, tab_id=tab_id) if n["id"] != node["id"]), None)
+        # Pick any non-link peer: the smoke node is a `debug`, and `nr_wire`
+        # rejects mixing link nodes with non-link nodes by design.
+        other = next(
+            (n for n in flows.list_nodes(work, tab_id=tab_id)
+             if n["id"] != node["id"] and n["type"] not in ("link in", "link out")),
+            None,
+        )
         if other is not None:
             flows.wire(work, src_id=node["id"], src_port=0, dst_id=other["id"])
             flows.unwire(work, src_id=node["id"], src_port=0, dst_id=other["id"])
