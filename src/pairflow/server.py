@@ -13,6 +13,9 @@ Tier 2 (verification — most are async; talks to NR, MQTT, systemd):
 
 Tier 3 (git workflow inside the Node-RED project directory):
   git_status, git_diff, git_log, git_commit
+
+Tier 4 (Home Assistant MQTT Discovery helpers):
+  ha_discovery_list, ha_discovery_validate
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from typing import Any
 
 from fastmcp import FastMCP
 
-from . import flows, git_ops, mqtt, nr_admin, service, validate
+from . import flows, git_ops, ha_discovery, mqtt, nr_admin, service, validate
 from .config import Config
 
 
@@ -271,6 +274,59 @@ def build_server(config: Config) -> FastMCP:
             message=message,
             paths=paths,
             allow_empty=allow_empty,
+        )
+
+    # ============================================================ #
+    # Tier 4 — Home Assistant MQTT Discovery helpers                 #
+    # ============================================================ #
+
+    @mcp.tool
+    async def ha_discovery_list(
+        component: str | None = None,
+        seconds: float = 2.0,
+        max_messages: int = 500,
+        broker: str = "default",
+    ) -> list[dict[str, Any]]:
+        """List retained HA MQTT Discovery configs.
+
+        Connects to `broker` (named broker from the Pairflow config),
+        subscribes to `homeassistant/<component>/+/config` (and the
+        longer `homeassistant/<component>/+/+/config` variant), waits
+        `seconds` for the retained flood to arrive, then disconnects.
+
+        Returns one entry per discovered entity with topic, component,
+        unique_id, name, device_class, and device identifiers — enough
+        to navigate; use ha_discovery_validate for a deeper look at a
+        specific entry.
+        """
+        return await ha_discovery.list_discoveries(
+            config.broker(broker),
+            component=component,
+            seconds=seconds,
+            max_messages=max_messages,
+        )
+
+    @mcp.tool
+    async def ha_discovery_validate(
+        topic: str,
+        seconds: float = 2.0,
+        broker: str = "default",
+    ) -> dict[str, Any]:
+        """Validate the retained Discovery config at `topic`.
+
+        Reads the retained payload and runs a minimal shape check:
+        valid JSON object, `unique_id` present, topic fields are strings,
+        `device` (if present) is an object, and (for known components)
+        at least one of the required topic-field groups is set.
+
+        Returns `{valid, errors, warnings, component, entity_id, config}`.
+        `errors` block validity; `warnings` are informational (e.g.,
+        unknown component, device without identifiers).
+        """
+        return await ha_discovery.validate_discovery(
+            config.broker(broker),
+            topic=topic,
+            seconds=seconds,
         )
 
     return mcp
