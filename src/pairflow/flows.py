@@ -24,7 +24,6 @@ from typing import Any
 from .validate import ValidationResult, validate_function
 from .writer import atomic_write, current_mtime
 
-
 # Fields included in compact node listings. The full node JSON (with
 # wires, configuration, embedded code) is available via get_node().
 _COMPACT_FIELDS = ("id", "type", "name", "z", "x", "y", "disabled")

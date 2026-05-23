@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel in-progress runs for the same PR / branch when a new commit arrives.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Set up Node.js
+        # Required for the function-node JS syntax-check tests
+        # (validate.py shells out to `node --check`).
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest ruff
+
+      - name: Lint with ruff
+        run: ruff check src tests
+
+      - name: Run tests
+        run: pytest -q
+
+      - name: Doctor smoke (against generated fixture)
+        # Generates a fresh realistic flows.json, runs doctor read-only +
+        # write-smoke against it, exits non-zero on any problem.
+        run: |
+          python - <<'PY'
+          import json, pathlib, sys
+          sys.path.insert(0, "tests")
+          from integration.conftest import _build_large_flow
+          p = pathlib.Path("/tmp/pairflow-ci-flows.json")
+          p.write_text(json.dumps(_build_large_flow(), indent=4))
+          print(f"Generated fixture: {p}")
+          PY
+          pairflow-doctor --flows /tmp/pairflow-ci-flows.json --smoke
