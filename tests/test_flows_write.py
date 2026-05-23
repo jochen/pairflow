@@ -191,3 +191,106 @@ def test_unwire_removes(fw: Path):
 def test_unwire_noop_if_not_present(fw: Path):
     result = flows.unwire(fw, "inj", 0, "dbg")
     assert result["removed"] is False
+
+
+def test_wire_returns_kind_for_wire_pair(fw: Path):
+    result = flows.wire(fw, "inj", 0, "dbg")
+    assert result["kind"] == "wire"
+
+
+# ---- wire / unwire on link pairs ------------------------------------------ #
+
+
+def test_wire_link_pair_fixes_asymmetric_to_symmetric(fw: Path):
+    # Start from a clean asymmetric state: link-out knows about link-in,
+    # link-in's .links is empty (the exact bug we hit on 2026-05-23).
+    flows.update_node(fw, "lo", {"links": ["li"]})
+    flows.update_node(fw, "li", {"links": []})
+
+    result = flows.wire(fw, "lo", 0, "li")
+
+    assert result == {"src": "lo", "dst": "li", "added": True, "kind": "link"}
+    assert flows.get_node(fw, "lo")["links"] == ["li"]
+    assert flows.get_node(fw, "li")["links"] == ["lo"]
+
+
+def test_wire_link_pair_idempotent(fw: Path):
+    # Fixture already has both sides linked.
+    result = flows.wire(fw, "lo", 0, "li")
+    assert result["added"] is False
+    assert result["kind"] == "link"
+
+
+def test_wire_link_pair_connects_fresh_pair(fw: Path):
+    flows.add_node(fw, tab_id="tab1", node_type="link out", node_id="lo2")
+    flows.add_node(fw, tab_id="tab1", node_type="link in",  node_id="li2")
+
+    result = flows.wire(fw, "lo2", 0, "li2")
+
+    assert result["added"] is True
+    assert flows.get_node(fw, "lo2")["links"] == ["li2"]
+    assert flows.get_node(fw, "li2")["links"] == ["lo2"]
+
+
+def test_wire_link_pair_does_not_touch_wires_field(fw: Path):
+    flows.wire(fw, "lo", 0, "li")
+    # wires stays as the fixture set it (empty list); we did not accidentally
+    # append to it.
+    assert flows.get_node(fw, "lo")["wires"] == []
+    assert flows.get_node(fw, "li")["wires"] == []
+
+
+def test_wire_link_pair_src_port_is_ignored(fw: Path):
+    flows.update_node(fw, "lo", {"links": []})
+    flows.update_node(fw, "li", {"links": []})
+    # Any port value should land on the same `.links` arrays — link nodes
+    # don't have ports.
+    flows.wire(fw, "lo", 7, "li")
+    assert flows.get_node(fw, "lo")["links"] == ["li"]
+    assert flows.get_node(fw, "li")["links"] == ["lo"]
+
+
+def test_wire_link_out_to_non_link_in_rejected(fw: Path):
+    with pytest.raises(ValueError, match="Link wiring requires"):
+        flows.wire(fw, "lo", 0, "dbg")
+
+
+def test_wire_non_link_out_to_link_in_rejected(fw: Path):
+    with pytest.raises(ValueError, match="Link wiring requires"):
+        flows.wire(fw, "inj", 0, "li")
+
+
+def test_wire_link_in_as_source_rejected(fw: Path):
+    # link-in as src is wrong direction.
+    with pytest.raises(ValueError, match="Link wiring requires"):
+        flows.wire(fw, "li", 0, "lo")
+
+
+def test_unwire_link_pair_removes_from_both_sides(fw: Path):
+    result = flows.unwire(fw, "lo", 0, "li")
+
+    assert result == {"src": "lo", "dst": "li", "removed": True, "kind": "link"}
+    assert flows.get_node(fw, "lo")["links"] == []
+    assert flows.get_node(fw, "li")["links"] == []
+
+
+def test_unwire_link_pair_noop_if_already_disconnected(fw: Path):
+    flows.unwire(fw, "lo", 0, "li")
+    result = flows.unwire(fw, "lo", 0, "li")
+    assert result["removed"] is False
+    assert result["kind"] == "link"
+
+
+def test_unwire_link_pair_cleans_orphan_backref(fw: Path):
+    # Half-broken state: link-out forgot about link-in, but link-in still
+    # holds a stale backref. unwire should still tidy the surviving side.
+    flows.update_node(fw, "lo", {"links": []})
+    # li.links still contains "lo" from the fixture.
+    result = flows.unwire(fw, "lo", 0, "li")
+    assert result["removed"] is True
+    assert flows.get_node(fw, "li")["links"] == []
+
+
+def test_unwire_type_mismatch_rejected(fw: Path):
+    with pytest.raises(ValueError, match="Link wiring requires"):
+        flows.unwire(fw, "lo", 0, "dbg")

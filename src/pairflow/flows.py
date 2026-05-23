@@ -225,15 +225,35 @@ def wire(
     src_port: int,
     dst_id: str,
 ) -> dict[str, Any]:
-    """Add a wire from `src_id[src_port]` to `dst_id`. No-op if already wired."""
+    """Connect `src_id` to `dst_id`. Idempotent.
+
+    Two shapes, dispatched by node type:
+
+    * **Wire pair** — `src.wires[src_port]` gets `dst_id` appended.
+    * **Link pair** (`src` is `link out`, `dst` is `link in`) — the `.links`
+      array on *both* nodes is updated, because Node-RED's editor and Pairflow's
+      direct-patch model treat the link-in's `.links` as UI metadata that must
+      mirror the link-out's `.links` (the real routing source). `src_port` is
+      ignored for link pairs.
+
+    Mixing a link node with a non-link node on either side raises `ValueError`
+    rather than silently writing the wrong field.
+    """
     mtime = current_mtime(flows_file)
     data = _read(flows_file)
 
     src_idx = _find_index(data, src_id)
-    # Confirm destination exists (will raise KeyError if not):
-    _find_index(data, dst_id)
-
+    dst_idx = _find_index(data, dst_id)
     src = data[src_idx]
+    dst = data[dst_idx]
+
+    if _is_link_node(src) or _is_link_node(dst):
+        _require_link_pair(src, dst)
+        added = _add_link_ref(src, dst_id) | _add_link_ref(dst, src_id)
+        if added:
+            atomic_write(flows_file, data, expected_mtime=mtime)
+        return {"src": src_id, "dst": dst_id, "added": added, "kind": "link"}
+
     wires = src.setdefault("wires", [])
     while len(wires) <= src_port:
         wires.append([])
@@ -245,7 +265,13 @@ def wire(
 
     if added:
         atomic_write(flows_file, data, expected_mtime=mtime)
-    return {"src": src_id, "src_port": src_port, "dst": dst_id, "added": added}
+    return {
+        "src": src_id,
+        "src_port": src_port,
+        "dst": dst_id,
+        "added": added,
+        "kind": "wire",
+    }
 
 
 def unwire(
@@ -254,14 +280,28 @@ def unwire(
     src_port: int,
     dst_id: str,
 ) -> dict[str, Any]:
-    """Remove the wire from `src_id[src_port]` to `dst_id`, if present."""
+    """Disconnect `src_id` from `dst_id`. No-op if not connected.
+
+    Symmetric to `wire`: link pairs are unlinked from both nodes' `.links`,
+    wire pairs from `src.wires[src_port]`. `src_port` is ignored for link
+    pairs.
+    """
     mtime = current_mtime(flows_file)
     data = _read(flows_file)
 
     src_idx = _find_index(data, src_id)
+    dst_idx = _find_index(data, dst_id)
     src = data[src_idx]
-    wires = src.get("wires") or []
+    dst = data[dst_idx]
 
+    if _is_link_node(src) or _is_link_node(dst):
+        _require_link_pair(src, dst)
+        removed = _remove_link_ref(src, dst_id) | _remove_link_ref(dst, src_id)
+        if removed:
+            atomic_write(flows_file, data, expected_mtime=mtime)
+        return {"src": src_id, "dst": dst_id, "removed": removed, "kind": "link"}
+
+    wires = src.get("wires") or []
     removed = False
     if src_port < len(wires) and dst_id in wires[src_port]:
         wires[src_port] = [d for d in wires[src_port] if d != dst_id]
@@ -269,7 +309,42 @@ def unwire(
 
     if removed:
         atomic_write(flows_file, data, expected_mtime=mtime)
-    return {"src": src_id, "src_port": src_port, "dst": dst_id, "removed": removed}
+    return {
+        "src": src_id,
+        "src_port": src_port,
+        "dst": dst_id,
+        "removed": removed,
+        "kind": "wire",
+    }
+
+
+def _is_link_node(node: dict[str, Any]) -> bool:
+    return node.get("type") in ("link in", "link out")
+
+
+def _require_link_pair(src: dict[str, Any], dst: dict[str, Any]) -> None:
+    if src.get("type") != "link out" or dst.get("type") != "link in":
+        raise ValueError(
+            f"Link wiring requires src='link out' and dst='link in'; "
+            f"got src={src.get('type')!r} ({src.get('id')!r}), "
+            f"dst={dst.get('type')!r} ({dst.get('id')!r})"
+        )
+
+
+def _add_link_ref(node: dict[str, Any], peer_id: str) -> bool:
+    links = node.setdefault("links", [])
+    if peer_id in links:
+        return False
+    links.append(peer_id)
+    return True
+
+
+def _remove_link_ref(node: dict[str, Any], peer_id: str) -> bool:
+    links = node.get("links")
+    if not isinstance(links, list) or peer_id not in links:
+        return False
+    node["links"] = [d for d in links if d != peer_id]
+    return True
 
 
 # --------------------------------------------------------------------------- #

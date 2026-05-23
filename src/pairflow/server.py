@@ -100,12 +100,27 @@ def build_server(config: Config) -> FastMCP:
 
     @mcp.tool
     def nr_wire(src_id: str, src_port: int, dst_id: str) -> dict[str, Any]:
-        """Wire from `src_id[src_port]` to `dst_id`. Idempotent."""
+        """Connect `src_id` to `dst_id`. Idempotent.
+
+        For `link out` → `link in` pairs, the `.links` array on *both* nodes
+        is updated (NR's editor expects this; setting only the link-out side
+        works at runtime but the editor shows "no input connected" at the
+        link-in). `src_port` is ignored in that case.
+
+        For all other node types, this writes the regular `src.wires[src_port]`
+        connection. Mixing link and non-link nodes raises `ValueError`.
+
+        Returns `{src, dst, added, kind}` where `kind` is `"link"` or `"wire"`.
+        """
         return flows.wire(flows_file, src_id=src_id, src_port=src_port, dst_id=dst_id)
 
     @mcp.tool
     def nr_unwire(src_id: str, src_port: int, dst_id: str) -> dict[str, Any]:
-        """Remove the wire from `src_id[src_port]` to `dst_id`."""
+        """Disconnect `src_id` from `dst_id`. Symmetric to `nr_wire`.
+
+        Link pairs are removed from both nodes' `.links`; wire pairs from
+        `src.wires[src_port]`. `src_port` is ignored for link pairs.
+        """
         return flows.unwire(flows_file, src_id=src_id, src_port=src_port, dst_id=dst_id)
 
     @mcp.tool
