@@ -32,3 +32,14 @@ port = 1883
 # port         = 1883
 # username     = "pairflow"
 # password_env = "PAIRFLOW_REMOTE_BROKER_PW"   # name of the env var, not the password
+
+
+# Optional: empirical per-call usage log. Disabled by default. When enabled,
+# every MCP tool call appends one JSON line to usage_log_path describing the
+# tool, arguments (large blobs scrubbed to size + head), response size, and
+# any truncation flags that fired. Lets you see which tools dominate the
+# token budget on real workloads. See src/pairflow/usage_log.py for fields.
+#
+# [telemetry]
+# usage_log      = true
+# usage_log_path = "/home/pi/.local/state/pairflow/usage.jsonl"   # optional; defaults to $XDG_STATE_HOME/pairflow/usage.jsonl

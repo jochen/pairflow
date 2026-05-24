@@ -74,6 +74,8 @@ A few conventions the codebase follows; please continue them in PRs:
 
   See `nr_list_nodes` (summary default), `nr_get_node` (code modes), `nr_tail_debug` / `mqtt_sub_collect` (per-record caps), and `git_diff` (stat default) for the pattern.
 
+  When you add a tool, it is **automatically** instrumented by the per-call usage logger (`src/pairflow/usage_log.py`), wired in centrally via the `tool` decorator in `server.py`. You don't need to opt in. To later check whether your size estimates held up on real workloads, enable `[telemetry] usage_log = true` in the Pairflow config and inspect the resulting JSONL — see the architecture doc for the record shape.
+
 ## Things that are out of scope for Pairflow itself
 
 These are deliberate non-goals, mentioned here so contributors don't spend time on them and then have a PR closed:

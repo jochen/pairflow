@@ -57,6 +57,20 @@ Pairflow's reads therefore default to summaries; the full payload is opt-in:
 
 This is a load-bearing convention, not a style preference — see CONTRIBUTING.md for the rule new tools must follow.
 
+### Empirical instrumentation: per-call usage log
+
+The response-shape design above is built on estimates. To validate it on real workloads, Pairflow ships an opt-in per-call usage logger (`src/pairflow/usage_log.py`). When `[telemetry] usage_log = true` is set in the config, every MCP tool call appends one JSON line to `~/.local/state/pairflow/usage.jsonl` (overridable):
+
+```json
+{"ts": "...", "tool": "nr_list_nodes", "args": {"tab_id": "abc", "summary": null},
+ "duration_ms": 4, "response_bytes": 873, "response_shape": {"type": "dict", "keys": 5},
+ "truncations": {}, "error": null}
+```
+
+The logger is wired in centrally via the `tool` decorator inside `build_server` — every tool inherits instrumentation automatically with no per-tool bookkeeping. Arguments larger than 200 chars (or dicts >800 JSON chars) are scrubbed to `{_size, _type, _head}` so MQTT payloads, JS bodies, and other blobs never leak verbatim. Logger failures are swallowed — instrumentation never breaks the tool call.
+
+Use the log to answer questions like *"which tool dominates the token budget?"*, *"which opt-in flags actually get used?"*, *"how often does truncation fire — is the cap right?"*. The default is off; turn it on for a sprint, harvest data, decide.
+
 ## Tool tiers
 
 Tools are grouped by purpose. The grouping is descriptive, not technical — all tools live in one MCP server.

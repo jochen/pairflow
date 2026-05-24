@@ -36,9 +36,23 @@ class BrokerConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class TelemetryConfig:
+    """Optional per-call usage logging — disabled by default.
+
+    When `usage_log` is true, every MCP tool call appends one JSON line to
+    `usage_log_path` (default: $XDG_STATE_HOME/pairflow/usage.jsonl, i.e.
+    ~/.local/state/pairflow/usage.jsonl). See `pairflow.usage_log` for the
+    record shape.
+    """
+    usage_log: bool = False
+    usage_log_path: Path | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     node_red: NodeRedConfig
     brokers: dict[str, BrokerConfig] = field(default_factory=dict)
+    telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
 
     def broker(self, name: str = "default") -> BrokerConfig:
         try:
@@ -101,4 +115,14 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
             password_env=b.get("password_env"),
         )
 
-    return Config(node_red=nr, brokers=brokers)
+    tel_raw = raw.get("telemetry") or {}
+    telemetry = TelemetryConfig(
+        usage_log=bool(tel_raw.get("usage_log", False)),
+        usage_log_path=(
+            Path(tel_raw["usage_log_path"]).expanduser()
+            if tel_raw.get("usage_log_path")
+            else None
+        ),
+    )
+
+    return Config(node_red=nr, brokers=brokers, telemetry=telemetry)

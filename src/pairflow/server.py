@@ -38,11 +38,20 @@ from . import (
     validate,
 )
 from .config import Config
+from .usage_log import UsageLogger
 
 
 def build_server(config: Config) -> FastMCP:
     mcp = FastMCP(name="pairflow")
     flows_file = config.node_red.flows_file
+
+    # Per-call usage logger; no-op when telemetry.usage_log is false.
+    # `tool` wraps every MCP tool with the logger so new tools auto-inherit
+    # the instrumentation — see CONTRIBUTING.md and src/pairflow/usage_log.py.
+    usage = UsageLogger.from_config(config.telemetry)
+
+    def tool(fn):
+        return mcp.tool(usage.wrap(fn))
 
     # ============================================================ #
     # Tier 1 — flow surgery                                          #
@@ -50,7 +59,7 @@ def build_server(config: Config) -> FastMCP:
 
     # ---- read ----------------------------------------------------------- #
 
-    @mcp.tool
+    @tool
     def nr_list_tabs(include_info: bool = False) -> list[dict[str, Any]]:
         """List all tabs (workspaces) in the Node-RED flows file.
 
@@ -59,7 +68,7 @@ def build_server(config: Config) -> FastMCP:
         """
         return flows.list_tabs(flows_file, include_info=include_info)
 
-    @mcp.tool
+    @tool
     def nr_list_nodes(
         tab_id: str | None = None,
         node_type: str | None = None,
@@ -86,7 +95,7 @@ def build_server(config: Config) -> FastMCP:
             summary=summary,
         )
 
-    @mcp.tool
+    @tool
     def nr_get_node(node_id: str, code: str = "signatures") -> dict[str, Any] | None:
         """Return a node by id, or null if not found.
 
@@ -100,7 +109,7 @@ def build_server(config: Config) -> FastMCP:
 
     # ---- write ---------------------------------------------------------- #
 
-    @mcp.tool
+    @tool
     def nr_add_node(
         tab_id: str,
         node_type: str,
@@ -120,17 +129,17 @@ def build_server(config: Config) -> FastMCP:
             node_id=node_id,
         )
 
-    @mcp.tool
+    @tool
     def nr_update_node(node_id: str, patch: dict[str, Any]) -> dict[str, Any]:
         """Apply a shallow patch to a node. id/type/z are not patchable."""
         return flows.update_node(flows_file, node_id, patch)
 
-    @mcp.tool
+    @tool
     def nr_delete_node(node_id: str) -> dict[str, Any]:
         """Delete a node and clean up wire/link references in other nodes."""
         return flows.delete_node(flows_file, node_id)
 
-    @mcp.tool
+    @tool
     def nr_wire(src_id: str, src_port: int, dst_id: str) -> dict[str, Any]:
         """Connect `src_id` to `dst_id`. Idempotent.
 
@@ -146,7 +155,7 @@ def build_server(config: Config) -> FastMCP:
         """
         return flows.wire(flows_file, src_id=src_id, src_port=src_port, dst_id=dst_id)
 
-    @mcp.tool
+    @tool
     def nr_unwire(src_id: str, src_port: int, dst_id: str) -> dict[str, Any]:
         """Disconnect `src_id` from `dst_id`. Symmetric to `nr_wire`.
 
@@ -155,13 +164,13 @@ def build_server(config: Config) -> FastMCP:
         """
         return flows.unwire(flows_file, src_id=src_id, src_port=src_port, dst_id=dst_id)
 
-    @mcp.tool
+    @tool
     def nr_validate_function(code: str) -> dict[str, Any]:
         """Syntax-check a function-node body without writing it."""
         result = validate.validate_function(code)
         return {"ok": result.ok, "error": result.error}
 
-    @mcp.tool
+    @tool
     async def nr_run_function(
         node_id: str,
         msg: dict[str, Any] | None = None,
@@ -197,7 +206,7 @@ def build_server(config: Config) -> FastMCP:
     # Tier 2 — verification                                          #
     # ============================================================ #
 
-    @mcp.tool
+    @tool
     def nr_deploy(wait_timeout: float = 30.0) -> dict[str, Any]:
         """Restart the Node-RED systemd service so disk-based flow changes go live.
 
@@ -212,7 +221,7 @@ def build_server(config: Config) -> FastMCP:
             wait_timeout=wait_timeout,
         )
 
-    @mcp.tool
+    @tool
     def nr_inject(node_id: str) -> dict[str, Any]:
         """Trigger an inject node via the Admin API.
 
@@ -221,7 +230,7 @@ def build_server(config: Config) -> FastMCP:
         """
         return nr_admin.inject(config.node_red.admin_url, node_id)
 
-    @mcp.tool
+    @tool
     async def nr_tail_debug(
         seconds: float = 5.0,
         filter_substr: str | None = None,
@@ -247,7 +256,7 @@ def build_server(config: Config) -> FastMCP:
             max_msg_chars=max_msg_chars,
         )
 
-    @mcp.tool
+    @tool
     def nr_journal(
         lines: int = 100,
         filter_regex: str | None = None,
@@ -264,7 +273,7 @@ def build_server(config: Config) -> FastMCP:
             filter_regex=filter_regex,
         )
 
-    @mcp.tool
+    @tool
     async def mqtt_sub_collect(
         topic: str,
         seconds: float = 5.0,
@@ -290,7 +299,7 @@ def build_server(config: Config) -> FastMCP:
             max_payload_chars=max_payload_chars,
         )
 
-    @mcp.tool
+    @tool
     async def mqtt_pub(
         topic: str,
         payload: str,
@@ -312,7 +321,7 @@ def build_server(config: Config) -> FastMCP:
             qos=qos,
         )
 
-    @mcp.tool
+    @tool
     async def nr_trace_pipeline(
         trigger_inject: str,
         seconds: float = 5.0,
@@ -355,7 +364,7 @@ def build_server(config: Config) -> FastMCP:
             max_payload_chars=max_payload_chars,
         )
 
-    @mcp.tool
+    @tool
     async def mqtt_pub_and_observe(
         pub_topic: str,
         pub_payload: str,
@@ -406,7 +415,7 @@ def build_server(config: Config) -> FastMCP:
             )
         return pd
 
-    @mcp.tool
+    @tool
     def git_status() -> dict[str, Any]:
         """Parsed status of the Node-RED project's git repo.
 
@@ -416,7 +425,7 @@ def build_server(config: Config) -> FastMCP:
         """
         return git_ops.status(_project_dir())
 
-    @mcp.tool
+    @tool
     def git_diff(
         path: str | None = None,
         staged: bool = False,
@@ -441,12 +450,12 @@ def build_server(config: Config) -> FastMCP:
             max_bytes=max_bytes,
         )
 
-    @mcp.tool
+    @tool
     def git_log(count: int = 10) -> dict[str, Any]:
         """Recent commits in the project repo as structured records."""
         return {"commits": git_ops.log(_project_dir(), count=count)}
 
-    @mcp.tool
+    @tool
     def git_commit(
         message: str,
         paths: list[str] | None = None,
@@ -469,7 +478,7 @@ def build_server(config: Config) -> FastMCP:
     # Tier 4 — Home Assistant MQTT Discovery helpers                 #
     # ============================================================ #
 
-    @mcp.tool
+    @tool
     async def ha_discovery_list(
         component: str | None = None,
         seconds: float = 2.0,
@@ -495,7 +504,7 @@ def build_server(config: Config) -> FastMCP:
             max_messages=max_messages,
         )
 
-    @mcp.tool
+    @tool
     async def ha_discovery_validate(
         topic: str,
         seconds: float = 2.0,
