@@ -4,11 +4,13 @@ Tier 1 (flow surgery — synchronous; touches the flows file on disk):
   Reads:  nr_list_tabs, nr_list_nodes, nr_get_node
   Writes: nr_add_node, nr_update_node, nr_delete_node, nr_wire, nr_unwire,
           nr_validate_function
+  Run:    nr_run_function (sandboxed; node subprocess, no deploy)
 
 Tier 2 (verification — most are async; talks to NR, MQTT, systemd):
   Deploy:   nr_deploy
   Trigger:  nr_inject
   Inspect:  nr_tail_debug, nr_journal
+  Trace:    nr_trace_pipeline (inject + debug + mqtt in one atomic call)
   MQTT:     mqtt_sub_collect, mqtt_pub, mqtt_pub_and_observe
 
 Tier 3 (git workflow inside the Node-RED project directory):
@@ -24,7 +26,17 @@ from typing import Any
 
 from fastmcp import FastMCP
 
-from . import flows, git_ops, ha_discovery, mqtt, nr_admin, service, validate
+from . import (
+    flows,
+    function_runner,
+    git_ops,
+    ha_discovery,
+    mqtt,
+    nr_admin,
+    service,
+    tracing,
+    validate,
+)
 from .config import Config
 
 
@@ -128,6 +140,38 @@ def build_server(config: Config) -> FastMCP:
         """Syntax-check a function-node body without writing it."""
         result = validate.validate_function(code)
         return {"ok": result.ok, "error": result.error}
+
+    @mcp.tool
+    async def nr_run_function(
+        node_id: str,
+        msg: dict[str, Any] | None = None,
+        timeout: float = 5.0,
+    ) -> dict[str, Any]:
+        """Execute a function-node's body sandboxed — no Node-RED restart.
+
+        Spawns a `node` subprocess that wraps the body in the same shape NR
+        does (async function with `msg, context, flow, global, node, env`),
+        mocks the NR runtime surface in-memory, runs for at most `timeout`
+        seconds, then returns `{outputs, errors, warns, logs, duration_ms}`.
+
+        `outputs` includes both explicit `return msg;` values and anything
+        passed to `node.send(...)` — including from `setTimeout`/`Promise`
+        callbacks that fire within the timeout window. Async failures inside
+        those callbacks land in `errors` (the original motivation: silent
+        `Object.keys(undefined)` inside a `setTimeout`).
+
+        Caveats — v1 limitations:
+          * `context`/`flow`/`global` are fresh in-memory stores per call,
+            not the real NR persistence.
+          * `require()` of function-external modules is not wired up.
+          * `node.status()`/`node.done()` are no-ops.
+        """
+        return await function_runner.run_function(
+            flows_file,
+            node_id=node_id,
+            msg=msg,
+            timeout=timeout,
+        )
 
     # ============================================================ #
     # Tier 2 — verification                                          #
@@ -233,6 +277,45 @@ def build_server(config: Config) -> FastMCP:
             payload=payload,
             retain=retain,
             qos=qos,
+        )
+
+    @mcp.tool
+    async def nr_trace_pipeline(
+        trigger_inject: str,
+        seconds: float = 5.0,
+        expect_topic: str | None = None,
+        broker: str = "default",
+        filter_substr: str | None = None,
+        max_debug: int = 100,
+        max_mqtt: int = 100,
+    ) -> dict[str, Any]:
+        """Trigger an inject, watch debug + MQTT in one atomic call.
+
+        Opens the NR debug WebSocket and (if `expect_topic` is given) an
+        MQTT subscription BEFORE firing the inject — so reactions cannot
+        race the subscription, which is the failure mode of running
+        `nr_tail_debug` + `mqtt_sub_collect` + `nr_inject` as parallel tools.
+
+        Returns `{fired_nodes, output_msgs, path_complete, duration_ms,
+        inject}`. `fired_nodes` is the debug-sidebar event list (same shape
+        as `nr_tail_debug`); `output_msgs` are messages on `expect_topic`
+        (same shape as `mqtt_sub_collect`). `path_complete` is true/false
+        when `expect_topic` is given (did any message arrive?), null when
+        no topic was specified.
+
+        Use this to diagnose "I poke node X, does anything reach topic Y?"
+        in one round trip instead of three.
+        """
+        broker_cfg = config.broker(broker) if expect_topic else None
+        return await tracing.trace_pipeline(
+            admin_url=config.node_red.admin_url,
+            trigger_inject=trigger_inject,
+            seconds=seconds,
+            expect_topic=expect_topic,
+            broker=broker_cfg,
+            filter_substr=filter_substr,
+            max_debug=max_debug,
+            max_mqtt=max_mqtt,
         )
 
     @mcp.tool
