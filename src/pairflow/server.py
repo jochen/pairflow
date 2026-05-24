@@ -9,7 +9,7 @@ Tier 2 (verification — most are async; talks to NR, MQTT, systemd):
   Deploy:   nr_deploy
   Trigger:  nr_inject
   Inspect:  nr_tail_debug, nr_journal
-  MQTT:     mqtt_sub_collect, mqtt_pub
+  MQTT:     mqtt_sub_collect, mqtt_pub, mqtt_pub_and_observe
 
 Tier 3 (git workflow inside the Node-RED project directory):
   git_status, git_diff, git_log, git_commit
@@ -233,6 +233,42 @@ def build_server(config: Config) -> FastMCP:
             payload=payload,
             retain=retain,
             qos=qos,
+        )
+
+    @mcp.tool
+    async def mqtt_pub_and_observe(
+        pub_topic: str,
+        pub_payload: str,
+        observe_topics: list[str],
+        seconds: float = 5.0,
+        max_messages: int = 100,
+        pub_retain: bool = False,
+        pub_qos: int = 0,
+        broker: str = "default",
+    ) -> dict[str, Any]:
+        """Subscribe to `observe_topics`, then publish, then collect on one
+        connection.
+
+        The subscriptions are confirmed (SUBACK) before the publish is sent,
+        so a response triggered by the publish cannot race the subscription —
+        which is the failure mode you get from calling `mqtt_sub_collect` and
+        `mqtt_pub` in parallel. Use this when diagnosing an MQTT pipeline
+        where the response can arrive in milliseconds (HA→bridge→device,
+        Node-RED function chain, etc.).
+
+        Returns `{published, observed, broker}`. `published` carries
+        topic/bytes/qos/retain; `observed` is the list of received messages
+        (same shape as `mqtt_sub_collect`).
+        """
+        return await mqtt.pub_and_observe(
+            config.broker(broker),
+            pub_topic=pub_topic,
+            pub_payload=pub_payload,
+            observe_topics=observe_topics,
+            seconds=seconds,
+            max_messages=max_messages,
+            pub_retain=pub_retain,
+            pub_qos=pub_qos,
         )
 
     # ============================================================ #

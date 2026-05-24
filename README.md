@@ -6,11 +6,11 @@ Pairflow is a Model Context Protocol server that lets an AI coding agent (Claude
 
 The name reads two ways: **pair**-programming between a human and an AI, and **flow** as in Node-RED flow. The goal is to make working *with* an AI on Node-RED feel like collaborating with a competent pair partner rather than supervising a tool that needs permission for every move.
 
-> **Status:** All four planned tiers implemented and tested. Twenty-one MCP tools live, 131 tests green on Python 3.11/3.12/3.13.
+> **Status:** All four planned tiers implemented and tested. Twenty-two MCP tools live, 149 tests green on Python 3.11/3.12/3.13.
 >
 > *Tier 1 — flow surgery:* `nr_list_tabs`, `nr_list_nodes`, `nr_get_node`, `nr_add_node`, `nr_update_node`, `nr_delete_node`, `nr_wire`, `nr_unwire`, `nr_validate_function` — with atomic writes, automatic timestamped backups, optimistic mtime locking, and pre-write JS syntax validation for function nodes.
 >
-> *Tier 2 — verification:* `nr_deploy` (systemctl restart + Admin-API readiness poll), `nr_inject` (trigger inject nodes via Admin API), `nr_tail_debug` (stream the debug sidebar over WebSocket), `nr_journal` (read recent systemd journal with regex filter), `mqtt_sub_collect` (subscribe-collect-disconnect against any configured broker), `mqtt_pub` (one-shot publish).
+> *Tier 2 — verification:* `nr_deploy` (systemctl restart + Admin-API readiness poll), `nr_inject` (trigger inject nodes via Admin API), `nr_tail_debug` (stream the debug sidebar over WebSocket), `nr_journal` (read recent systemd journal with regex filter), `mqtt_sub_collect` (subscribe-collect-disconnect against any configured broker), `mqtt_pub` (one-shot publish), `mqtt_pub_and_observe` (atomic subscribe-then-publish-then-collect on one connection, for race-free pipeline diagnosis).
 >
 > *Tier 3 — git workflow:* `git_status`, `git_diff`, `git_log`, `git_commit` — operate on the configured project directory; `git diff` stays the human's source of truth.
 >

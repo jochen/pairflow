@@ -131,3 +131,109 @@ async def test_publish_bytes_payload(broker: BrokerConfig):
         r = await mqtt.publish(broker, "t/x", b"\x00\x01\x02")
     assert r["bytes"] == 3
     assert fake.published[0][1] == b"\x00\x01\x02"
+
+
+# --- pub_and_observe -------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_pub_and_observe_subscribe_before_publish(broker: BrokerConfig):
+    """Subscribe must happen before publish — that is the whole point."""
+    order: list[str] = []
+
+    class _OrderingClient(_FakeClient):
+        async def subscribe(self, topic: str):
+            order.append(f"sub:{topic}")
+            await super().subscribe(topic)
+
+        async def publish(self, topic, payload, qos=0, retain=False):
+            order.append(f"pub:{topic}")
+            await super().publish(topic, payload, qos=qos, retain=retain)
+
+    fake = _OrderingClient([_FakeMessage("reply/x", b"ack")])
+    with patch("pairflow.mqtt._client", return_value=fake):
+        r = await mqtt.pub_and_observe(
+            broker,
+            pub_topic="cmd/x",
+            pub_payload="go",
+            observe_topics=["reply/x", "reply/y"],
+            seconds=0.5,
+        )
+
+    assert order == ["sub:reply/x", "sub:reply/y", "pub:cmd/x"]
+    assert r["published"] == {"topic": "cmd/x", "bytes": 2, "qos": 0, "retain": False}
+    assert r["observed"] == [
+        {"topic": "reply/x", "payload": "ack", "qos": 0, "retain": False}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pub_and_observe_max_messages_cap(broker: BrokerConfig):
+    msgs = [_FakeMessage(f"o/{i}", f"p{i}".encode()) for i in range(5)]
+    fake = _FakeClient(msgs)
+    with patch("pairflow.mqtt._client", return_value=fake):
+        r = await mqtt.pub_and_observe(
+            broker,
+            pub_topic="cmd/x",
+            pub_payload="go",
+            observe_topics=["o/#"],
+            seconds=2.0,
+            max_messages=2,
+        )
+    assert len(r["observed"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_pub_and_observe_timeout_returns_partial(broker: BrokerConfig):
+    """If no observations arrive, publish still happened and observed is []."""
+
+    class _Empty(_FakeClient):
+        @property
+        def messages(self):
+            async def _gen():
+                await asyncio.sleep(10)
+                yield None
+            return _gen()
+
+    fake = _Empty([])
+    with patch("pairflow.mqtt._client", return_value=fake):
+        r = await mqtt.pub_and_observe(
+            broker,
+            pub_topic="cmd/x",
+            pub_payload="go",
+            observe_topics=["reply/x"],
+            seconds=0.05,
+        )
+    assert r["observed"] == []
+    assert fake.published == [("cmd/x", b"go", 0, False)]
+
+
+@pytest.mark.asyncio
+async def test_pub_and_observe_requires_observe_topics(broker: BrokerConfig):
+    with pytest.raises(ValueError, match="observe_topics"):
+        await mqtt.pub_and_observe(
+            broker,
+            pub_topic="cmd/x",
+            pub_payload="go",
+            observe_topics=[],
+            seconds=1.0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_pub_and_observe_passes_pub_qos_retain(broker: BrokerConfig):
+    fake = _FakeClient([])
+    with patch("pairflow.mqtt._client", return_value=fake):
+        r = await mqtt.pub_and_observe(
+            broker,
+            pub_topic="cmd/x",
+            pub_payload=b"\x01\x02",
+            observe_topics=["reply/x"],
+            seconds=0.05,
+            pub_qos=1,
+            pub_retain=True,
+        )
+    assert fake.published == [("cmd/x", b"\x01\x02", 1, True)]
+    assert r["published"]["qos"] == 1
+    assert r["published"]["retain"] is True
+    assert r["published"]["bytes"] == 2
