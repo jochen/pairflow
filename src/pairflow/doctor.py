@@ -180,7 +180,7 @@ def smoke_exercise(flows_file: Path) -> str:
         # Pick any non-link peer: the smoke node is a `debug`, and `nr_wire`
         # rejects mixing link nodes with non-link nodes by design.
         other = next(
-            (n for n in flows.list_nodes(work, tab_id=tab_id)
+            (n for n in flows.list_nodes(work, tab_id=tab_id)["nodes"]
              if n["id"] != node["id"] and n["type"] not in ("link in", "link out")),
             None,
         )

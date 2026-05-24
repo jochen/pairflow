@@ -17,7 +17,9 @@ Restarting Node-RED so the change becomes live is a separate concern
 from __future__ import annotations
 
 import json
+import re
 import secrets
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -42,18 +44,28 @@ def _read(flows_file: Path) -> list[dict[str, Any]]:
     return data
 
 
-def list_tabs(flows_file: Path) -> list[dict[str, Any]]:
-    """Return all tabs (workspaces) with id, label, disabled flag, and info text."""
-    return [
-        {
+def list_tabs(
+    flows_file: Path,
+    include_info: bool = False,
+) -> list[dict[str, Any]]:
+    """Return all tabs (workspaces) with id, label, and disabled flag.
+
+    `info` (markdown notes attached to a tab) is omitted unless
+    `include_info=True` — those notes can be long and inflate the response.
+    """
+    out: list[dict[str, Any]] = []
+    for n in _read(flows_file):
+        if n.get("type") != "tab":
+            continue
+        entry: dict[str, Any] = {
             "id": n["id"],
             "label": n.get("label", ""),
             "disabled": bool(n.get("disabled", False)),
-            "info": n.get("info", ""),
         }
-        for n in _read(flows_file)
-        if n.get("type") == "tab"
-    ]
+        if include_info:
+            entry["info"] = n.get("info", "")
+        out.append(entry)
+    return out
 
 
 def list_nodes(
@@ -61,13 +73,41 @@ def list_nodes(
     tab_id: str | None = None,
     node_type: str | None = None,
     name_contains: str | None = None,
-) -> list[dict[str, Any]]:
-    """Return a compact view of nodes, optionally filtered."""
-    nodes = _read(flows_file)
-    out: list[dict[str, Any]] = []
-    needle = name_contains.lower() if name_contains else None
+    summary: bool | None = None,
+) -> dict[str, Any]:
+    """List nodes with optional filters; returns either a summary or a list.
 
-    for n in nodes:
+    When `summary` is None (default), the function picks: a summary when no
+    filter is set (cheap overview of a flow with hundreds or thousands of
+    nodes) and a full compact list when any filter narrows the scope.
+
+    Pass `summary=False` to force the full list even without filters; pass
+    `summary=True` to force a summary even with filters (useful for "how
+    many function nodes are in tab X?" style queries).
+
+    Summary shape::
+
+        {"summary": True, "total": N,
+         "by_tab": [{"id", "label", "count", "by_type": {...}}, ...],
+         "by_type": {type: count, ...},
+         "hint": "..."}
+
+    List shape::
+
+        {"summary": False, "count": N,
+         "filter": {"tab_id", "node_type", "name_contains"},
+         "nodes": [{id, type, name, z, x, y, disabled}, ...]}
+    """
+    raw = _read(flows_file)
+    needle = name_contains.lower() if name_contains else None
+    has_filter = any(x is not None for x in (tab_id, node_type, name_contains))
+    if summary is None:
+        summary = not has_filter
+
+    tab_labels = {n["id"]: n.get("label", "") for n in raw if n.get("type") == "tab"}
+
+    matches: list[dict[str, Any]] = []
+    for n in raw:
         t = n.get("type")
         if t == "tab":
             continue
@@ -77,17 +117,140 @@ def list_nodes(
             continue
         if needle is not None and needle not in str(n.get("name", "")).lower():
             continue
-        out.append({k: n[k] for k in _COMPACT_FIELDS if k in n})
+        matches.append(n)
 
-    return out
+    if summary:
+        by_tab: dict[str | None, Counter[str]] = {}
+        for n in matches:
+            z = n.get("z")
+            by_tab.setdefault(z, Counter())[n.get("type", "?")] += 1
+        tabs_out = [
+            {
+                "id": z,
+                "label": tab_labels.get(z, "" if z else "(no tab)"),
+                "count": sum(c.values()),
+                "by_type": dict(c.most_common()),
+            }
+            for z, c in by_tab.items()
+        ]
+        tabs_out.sort(key=lambda r: (-r["count"], str(r["id"])))
+        by_type_all: Counter[str] = Counter()
+        for c in by_tab.values():
+            by_type_all.update(c)
+        return {
+            "summary": True,
+            "total": len(matches),
+            "by_tab": tabs_out,
+            "by_type": dict(by_type_all.most_common()),
+            "hint": (
+                "Summary view. Pass tab_id, node_type, or name_contains to "
+                "see individual nodes, or summary=False to force the full list."
+            ),
+        }
+
+    out_list = [{k: n[k] for k in _COMPACT_FIELDS if k in n} for n in matches]
+    return {
+        "summary": False,
+        "count": len(out_list),
+        "filter": {
+            "tab_id": tab_id,
+            "node_type": node_type,
+            "name_contains": name_contains,
+        },
+        "nodes": out_list,
+    }
 
 
-def get_node(flows_file: Path, node_id: str) -> dict[str, Any] | None:
-    """Return the full node JSON, or None if no node with that id exists."""
+# Modes for the `func` body returned by get_node():
+#   "full"       — full original body
+#   "signatures" — compact summary (line count, head, declared helpers)
+#   "omit"       — drop the func field entirely
+_GET_NODE_CODE_MODES = ("full", "signatures", "omit")
+
+
+def get_node(
+    flows_file: Path,
+    node_id: str,
+    code: str = "signatures",
+) -> dict[str, Any] | None:
+    """Return the full node JSON, or None if no node with that id exists.
+
+    For function nodes, the `func` body can dominate the response (multi-KB).
+    The `code` mode controls how it is rendered:
+
+      * ``"signatures"`` (default) — replaces `func` with a `func_summary`
+        object (line count, character count, the first few non-blank lines,
+        and any top-level declared helpers / `node.on()` event names).
+      * ``"full"`` — keep the original `func` body in the response.
+      * ``"omit"`` — drop the `func` field entirely.
+
+    Non-function nodes are unaffected by `code`.
+    """
+    if code not in _GET_NODE_CODE_MODES:
+        raise ValueError(
+            f"Unknown code mode {code!r}; expected one of {_GET_NODE_CODE_MODES}"
+        )
     for n in _read(flows_file):
         if n.get("id") == node_id:
+            if n.get("type") == "function" and isinstance(n.get("func"), str) and code != "full":
+                n = dict(n)
+                func = n.pop("func")
+                if code == "signatures":
+                    n["func_summary"] = _summarize_function_body(func)
             return n
     return None
+
+
+def _summarize_function_body(code: str) -> dict[str, Any]:
+    """Extract a compact summary of a Node-RED function-node body.
+
+    Returns line/char counts, the first few non-blank lines, any top-level
+    `function` / `const|let|var fn = ...` declarations, and any `node.on()`
+    event names. Pattern-based, not a real parser — good enough to give the
+    AI structure clues without shipping kilobytes of JS.
+    """
+    lines = code.splitlines()
+    non_blank = [ln for ln in lines if ln.strip()]
+    head = non_blank[:8]
+
+    signatures: list[str] = []
+    seen: set[str] = set()
+
+    # function fooBar(a, b) {
+    for m in re.finditer(
+        r"^[ \t]*(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)",
+        code,
+        flags=re.MULTILINE,
+    ):
+        sig = m.group(0).strip()
+        if sig not in seen:
+            seen.add(sig)
+            signatures.append(sig)
+
+    # const|let|var name = (...) => / function(...) {
+    for m in re.finditer(
+        r"^[ \t]*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*"
+        r"(?:async\s+)?(?:function\s*\([^)]*\)|\([^)]*\)\s*=>)",
+        code,
+        flags=re.MULTILINE,
+    ):
+        sig = m.group(0).strip()
+        if sig not in seen:
+            seen.add(sig)
+            signatures.append(sig)
+
+    node_events = sorted({
+        m.group(1)
+        for m in re.finditer(r"node\.on\(\s*['\"]([^'\"]+)['\"]", code)
+    })
+
+    return {
+        "lines": len(lines),
+        "chars": len(code),
+        "head": head,
+        "signatures": signatures,
+        "node_events": node_events,
+    }
 
 
 # --------------------------------------------------------------------------- #

@@ -60,10 +60,21 @@ def test_list_nodes_per_tab_count_matches(large_flows: Path, large_flows_stats: 
     tabs = flows.list_tabs(large_flows)
     total = 0
     for tab in tabs:
-        total += len(flows.list_nodes(large_flows, tab_id=tab["id"]))
+        total += flows.list_nodes(large_flows, tab_id=tab["id"])["count"]
     # Non-tab, non-broker nodes (broker has no z, so it's not in any tab).
     expected = large_flows_stats["total_nodes"] - large_flows_stats["tab_count"] - 1  # broker
     assert total == expected
+
+
+def test_list_nodes_summary_default_on_large_flow(large_flows: Path, large_flows_stats: dict):
+    """Unfiltered call returns the cheap summary even on big flows."""
+    result = flows.list_nodes(large_flows)
+    assert result["summary"] is True
+    # Total counts everything except tabs.
+    assert result["total"] == large_flows_stats["total_nodes"] - large_flows_stats["tab_count"]
+    # by_type matches the fixture's histogram for the major types.
+    for t, n in large_flows_stats["nodes_by_type"].items():
+        assert result["by_type"].get(t, 0) == n
 
 
 # --- bulk writes -------------------------------------------------------------#
@@ -119,7 +130,7 @@ def test_delete_tolerates_dangling_link_refs(large_flows: Path):
     """The dangling refs in the fixture must not break delete_node."""
     # Pick any existing link-out node and delete one of its targets-via-z (i.e.
     # any node). The cleanup pass must complete without raising.
-    nodes = flows.list_nodes(large_flows, tab_id=None)
+    nodes = flows.list_nodes(large_flows, summary=False)["nodes"]
     victim = next(n for n in nodes if n["type"] == "function")
     flows.delete_node(large_flows, victim["id"])
     assert flows.get_node(large_flows, victim["id"]) is None
@@ -127,7 +138,7 @@ def test_delete_tolerates_dangling_link_refs(large_flows: Path):
 
 def test_update_function_bodies_en_masse(large_flows: Path):
     """Patch every function node's body to a valid new one. Validation runs each time."""
-    fns = flows.list_nodes(large_flows, node_type="function")
+    fns = flows.list_nodes(large_flows, node_type="function")["nodes"]
     new_body = "msg.payload = 'bulk-patched';\nreturn msg;"
     for fn in fns[:20]:
         result = flows.update_node(large_flows, fn["id"], {"func": new_body})
@@ -138,13 +149,13 @@ def test_update_rejects_invalid_function_body_mid_bulk(large_flows: Path):
     """One bad body must not silently corrupt the rest of the file."""
     if shutil.which("node") is None:
         pytest.skip("node binary not on PATH")
-    fns = flows.list_nodes(large_flows, node_type="function")
+    fns = flows.list_nodes(large_flows, node_type="function")["nodes"]
     target = fns[0]
     with pytest.raises(ValueError, match="Invalid function body"):
         flows.update_node(large_flows, target["id"], {"func": "if (true) {\nreturn"})
     # File still parses, target unchanged.
     json.loads(large_flows.read_text())
-    untouched = flows.get_node(large_flows, target["id"])
+    untouched = flows.get_node(large_flows, target["id"], code="full")
     assert untouched["func"] != "if (true) {\nreturn"
 
 

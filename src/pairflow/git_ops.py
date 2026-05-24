@@ -91,20 +91,55 @@ def diff(
     project_dir: Path,
     path: str | None = None,
     staged: bool = False,
+    stat: bool = True,
+    max_bytes: int = 16_000,
 ) -> dict[str, Any]:
     """Return the diff of the working tree (or the index, if ``staged``).
 
-    ``path`` (optional) restricts the diff to a single file. With no path,
-    the diff for the entire repo is returned — which can be large; callers
-    that only need a summary should use ``status`` instead.
+    With ``stat=True`` (default) only the numstat summary is returned
+    (per-file added/removed line counts) — this keeps the response small
+    even when the underlying diff is a multi-megabyte flows.json change.
+    Pass ``stat=False`` for the full unified diff.
+
+    ``path`` (optional) restricts both views to a single file.
+
+    For full diffs, the body is capped at ``max_bytes`` characters
+    (0 disables) and ``diff_truncated`` / ``diff_full_bytes`` are reported
+    when truncation occurs.
     """
-    args = ["diff", "--no-color"]
+    base = ["diff", "--no-color"]
     if staged:
-        args.append("--cached")
-    if path:
-        args.extend(["--", path])
-    raw = _git(project_dir, *args)
-    return {"staged": staged, "path": path, "diff": raw, "bytes": len(raw)}
+        base.append("--cached")
+    pathspec: list[str] = ["--", path] if path else []
+
+    if stat:
+        raw = _git(project_dir, *base, "--numstat", *pathspec)
+        files: list[dict[str, Any]] = []
+        for ln in raw.splitlines():
+            parts = ln.split("\t", 2)
+            if len(parts) != 3:
+                continue
+            added, removed, fpath = parts
+            files.append({
+                "added": None if added == "-" else int(added),
+                "removed": None if removed == "-" else int(removed),
+                "path": fpath,
+            })
+        return {"staged": staged, "path": path, "stat": True, "files": files}
+
+    raw = _git(project_dir, *base, *pathspec)
+    result: dict[str, Any] = {
+        "staged": staged,
+        "path": path,
+        "stat": False,
+        "diff": raw,
+        "bytes": len(raw),
+    }
+    if max_bytes and len(raw) > max_bytes:
+        result["diff"] = raw[:max_bytes]
+        result["diff_truncated"] = True
+        result["diff_full_bytes"] = len(raw)
+    return result
 
 
 # --- commit --------------------------------------------------------------- #

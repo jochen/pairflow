@@ -129,7 +129,7 @@ async def run_function(
     long enough to cover any timers you expect to fire. The wrapper exits
     after the timeout regardless of whether work is still pending.
     """
-    node = flows.get_node(flows_file, node_id)
+    node = flows.get_node(flows_file, node_id, code="full")
     if node is None:
         raise ValueError(f"No node with id {node_id!r} in flows file")
     if node.get("type") != "function":

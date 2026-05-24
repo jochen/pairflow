@@ -42,6 +42,21 @@ The cost is a service restart per write cycle. On a development host this is acc
 - **Auto-backup.** Before any write, Pairflow keeps the previous file under a timestamped name in the same directory. Configurable retention.
 - **Format preservation.** The same JSON indentation (4 spaces in the reference setup) is preserved across writes.
 
+## Response-shape principle: cheap by default
+
+The AI client pays for every byte of tool output in context tokens. A `flows.json` with 2000+ nodes, a Discovery scan returning hundreds of retained configs, or a `git diff` on a multi-MB JSON file would all overwhelm that budget if returned verbatim.
+
+Pairflow's reads therefore default to summaries; the full payload is opt-in:
+
+- `nr_list_nodes` returns counts per tab and per type unless a filter (`tab_id`, `node_type`, `name_contains`) is set, or `summary=False` is passed.
+- `nr_get_node` on a function node returns a `func_summary` (line count, head, declared helpers) instead of the full body, unless `code="full"` is passed.
+- `nr_list_tabs` omits each tab's `info` notes unless `include_info=True`.
+- `git_diff` returns numstat (per-file added/removed counts) unless `stat=False`; full diffs above `max_bytes` are truncated with a `diff_truncated` flag.
+- `nr_tail_debug` and `mqtt_sub_collect` truncate per-record payloads at `max_msg_chars` / `max_payload_chars` and tag truncated records with the original length so a follow-up call can refetch with a higher cap.
+- `ha_discovery_validate` returns only the validation verdict unless `include_config=True`.
+
+This is a load-bearing convention, not a style preference — see CONTRIBUTING.md for the rule new tools must follow.
+
 ## Tool tiers
 
 Tools are grouped by purpose. The grouping is descriptive, not technical — all tools live in one MCP server.

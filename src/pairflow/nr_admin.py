@@ -64,6 +64,7 @@ async def tail_debug(
     seconds: float,
     filter_substr: str | None = None,
     max_messages: int = 500,
+    max_msg_chars: int = 2000,
 ) -> list[dict[str, Any]]:
     """Collect debug-channel messages from Node-RED's /comms WebSocket.
 
@@ -74,6 +75,11 @@ async def tail_debug(
 
     `filter_substr`: case-insensitive substring filter applied to the
     rendered message string. Use it to narrow to a specific topic/payload.
+
+    `max_msg_chars`: per-message cap on the rendered `msg` field. When a
+    message would exceed it, the string is truncated and `msg_truncated`
+    is set on the record together with `msg_full_chars` (original length).
+    Pass 0 to disable truncation.
     """
     url = _ws_url(admin_url)
     messages: list[dict[str, Any]] = []
@@ -97,15 +103,8 @@ async def tail_debug(
                 rendered = str(data.get("msg", ""))
                 if needle is not None and needle not in rendered.lower():
                     continue
-                messages.append({
-                    "id": data.get("id"),
-                    "z": data.get("z"),
-                    "name": data.get("name"),
-                    "msg_topic": data.get("topic"),
-                    "msg": rendered,
-                    "format": data.get("format"),
-                    "timestamp": data.get("timestamp"),
-                })
+                record = _build_debug_record(data, rendered, max_msg_chars)
+                messages.append(record)
                 if max_messages and len(messages) >= max_messages:
                     return
 
@@ -123,3 +122,30 @@ async def tail_debug(
         raise RuntimeError(f"Cannot connect to Node-RED comms at {url}: {exc}") from exc
 
     return messages
+
+
+def _build_debug_record(
+    data: dict[str, Any],
+    rendered: str,
+    max_msg_chars: int,
+) -> dict[str, Any]:
+    """Shape a single debug-stream event into the record returned to callers.
+
+    Truncates the rendered `msg` if it exceeds `max_msg_chars` (0 disables),
+    tagging the record with the original length so the caller can decide
+    whether to fetch more.
+    """
+    record: dict[str, Any] = {
+        "id": data.get("id"),
+        "z": data.get("z"),
+        "name": data.get("name"),
+        "msg_topic": data.get("topic"),
+        "msg": rendered,
+        "format": data.get("format"),
+        "timestamp": data.get("timestamp"),
+    }
+    if max_msg_chars and len(rendered) > max_msg_chars:
+        record["msg"] = rendered[:max_msg_chars]
+        record["msg_truncated"] = True
+        record["msg_full_chars"] = len(rendered)
+    return record

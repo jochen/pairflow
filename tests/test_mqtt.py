@@ -110,6 +110,40 @@ async def test_sub_collect_decodes_invalid_utf8_as_hex(broker: BrokerConfig):
     assert out[0]["payload"] == "fffe00"
 
 
+@pytest.mark.asyncio
+async def test_sub_collect_truncates_large_payload(broker: BrokerConfig):
+    big = "y" * 5000
+    msgs = [
+        _FakeMessage("big", big.encode("utf-8")),
+        _FakeMessage("small", b"ok"),
+    ]
+    fake = _FakeClient(msgs)
+    with patch("pairflow.mqtt._client", return_value=fake):
+        out = await mqtt.sub_collect(
+            broker, "t/#", seconds=0.5, max_messages=2, max_payload_chars=100,
+        )
+    big_rec = next(r for r in out if r["topic"] == "big")
+    assert big_rec["payload"] == "y" * 100
+    assert big_rec["payload_truncated"] is True
+    assert big_rec["payload_full_chars"] == 5000
+    small_rec = next(r for r in out if r["topic"] == "small")
+    assert small_rec["payload"] == "ok"
+    assert "payload_truncated" not in small_rec
+
+
+@pytest.mark.asyncio
+async def test_sub_collect_truncation_disabled_with_zero(broker: BrokerConfig):
+    big = "y" * 5000
+    msgs = [_FakeMessage("big", big.encode("utf-8"))]
+    fake = _FakeClient(msgs)
+    with patch("pairflow.mqtt._client", return_value=fake):
+        out = await mqtt.sub_collect(
+            broker, "t/#", seconds=0.5, max_messages=1, max_payload_chars=0,
+        )
+    assert out[0]["payload"] == big
+    assert "payload_truncated" not in out[0]
+
+
 # --- publish ---------------------------------------------------------------- #
 
 

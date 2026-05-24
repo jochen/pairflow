@@ -35,6 +35,8 @@ async def trace_pipeline(
     max_debug: int = 100,
     max_mqtt: int = 100,
     settle_ms: int = 50,
+    max_msg_chars: int = 2000,
+    max_payload_chars: int = 2000,
 ) -> dict[str, Any]:
     """Open debug WS (+ optional MQTT sub), fire inject, collect for `seconds`.
 
@@ -103,31 +105,23 @@ async def trace_pipeline(
                     rendered = str(data.get("msg", ""))
                     if needle is not None and needle not in rendered.lower():
                         continue
-                    debug_records.append({
-                        "id": data.get("id"),
-                        "z": data.get("z"),
-                        "name": data.get("name"),
-                        "msg_topic": data.get("topic"),
-                        "msg": rendered,
-                        "format": data.get("format"),
-                        "timestamp": data.get("timestamp"),
-                    })
+                    debug_records.append(
+                        nr_admin._build_debug_record(data, rendered, max_msg_chars)
+                    )
                     if max_debug and len(debug_records) >= max_debug:
                         return
 
         async def _mqtt_consume() -> None:
             assert mqtt_client is not None
             async for m in mqtt_client.messages:
-                mqtt_records.append({
-                    "topic": str(m.topic),
-                    "payload": (
-                        mqtt._decode_payload(m.payload)
-                        if isinstance(m.payload, bytes)
-                        else m.payload
-                    ),
-                    "qos": int(m.qos),
-                    "retain": bool(m.retain),
-                })
+                payload = (
+                    mqtt._decode_payload(m.payload)
+                    if isinstance(m.payload, bytes)
+                    else m.payload
+                )
+                mqtt_records.append(
+                    mqtt._build_observed_record(m.topic, payload, m.qos, m.retain, max_payload_chars)
+                )
                 if max_mqtt and len(mqtt_records) >= max_mqtt:
                     return
 

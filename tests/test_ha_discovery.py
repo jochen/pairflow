@@ -190,6 +190,18 @@ async def test_validate_discovery_happy_path(broker: BrokerConfig):
     assert r["component"] == "cover"
     assert r["entity_id"] == "x"
     assert r["errors"] == []
+    # config is opt-in now to save tokens
+    assert "config" not in r
+
+
+@pytest.mark.asyncio
+async def test_validate_discovery_include_config(broker: BrokerConfig):
+    cfg = {"unique_id": "x", "command_topic": "x/set", "device": {"identifiers": ["x"]}}
+    with patch("pairflow.ha_discovery.mqtt.sub_collect",
+               AsyncMock(return_value=[_msg("homeassistant/cover/x/config", cfg)])):
+        r = await ha_discovery.validate_discovery(
+            broker, "homeassistant/cover/x/config", include_config=True
+        )
     assert r["config"] == cfg
 
 

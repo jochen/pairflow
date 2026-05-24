@@ -163,3 +163,37 @@ async def test_tail_debug_sends_subscribe_frame():
         await nr_admin.tail_debug("http://localhost:1880", seconds=0.05)
     assert len(fake.sent) == 1
     assert "subscribe" in fake.sent[0] and "debug" in fake.sent[0]
+
+
+@pytest.mark.asyncio
+async def test_tail_debug_truncates_large_msg():
+    big = "x" * 5000
+    events = [
+        {"topic": "debug", "data": {"id": "big", "msg": big, "timestamp": 1}},
+        {"topic": "debug", "data": {"id": "small", "msg": "ok", "timestamp": 2}},
+    ]
+    with patch("pairflow.nr_admin.websockets.connect",
+               return_value=_FakeWS(events)):
+        out = await nr_admin.tail_debug(
+            "http://localhost:1880", seconds=0.5, max_msg_chars=100,
+        )
+    big_rec = next(r for r in out if r["id"] == "big")
+    assert big_rec["msg"] == "x" * 100
+    assert big_rec["msg_truncated"] is True
+    assert big_rec["msg_full_chars"] == 5000
+    small_rec = next(r for r in out if r["id"] == "small")
+    assert small_rec["msg"] == "ok"
+    assert "msg_truncated" not in small_rec
+
+
+@pytest.mark.asyncio
+async def test_tail_debug_truncation_disabled_with_zero():
+    big = "x" * 5000
+    events = [{"topic": "debug", "data": {"id": "big", "msg": big, "timestamp": 1}}]
+    with patch("pairflow.nr_admin.websockets.connect",
+               return_value=_FakeWS(events)):
+        out = await nr_admin.tail_debug(
+            "http://localhost:1880", seconds=0.5, max_msg_chars=0,
+        )
+    assert out[0]["msg"] == big
+    assert "msg_truncated" not in out[0]

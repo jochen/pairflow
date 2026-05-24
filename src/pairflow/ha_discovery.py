@@ -178,11 +178,16 @@ async def validate_discovery(
     broker: BrokerConfig,
     topic: str,
     seconds: float = 2.0,
+    include_config: bool = False,
 ) -> dict[str, Any]:
     """Fetch the retained config at `topic` and run a shape validation.
 
-    Returns ``{topic, valid, component, errors, warnings, config}``.
+    Returns ``{topic, valid, component, entity_id, errors, warnings}``.
     `valid` is True only if `errors` is empty. `warnings` is informational.
+
+    `include_config=True` adds the full parsed config under the `config`
+    key. Off by default — climate/light/etc. configs are large and rarely
+    needed to act on validation results.
     """
     parsed = _parse_discovery_topic(topic)
     if not parsed:
@@ -190,45 +195,54 @@ async def validate_discovery(
             "topic": topic, "valid": False, "errors": [
                 f"Topic {topic!r} is not a Discovery config topic "
                 "(expected homeassistant/<component>/.../config)"
-            ], "warnings": [], "component": None, "config": None,
+            ], "warnings": [], "component": None,
         }
     component, entity_id = parsed
 
-    messages = await mqtt.sub_collect(broker, topic, seconds=seconds, max_messages=1)
+    # Validation needs the full payload regardless of caller's include_config
+    # preference, so disable payload truncation on this internal sub.
+    messages = await mqtt.sub_collect(
+        broker, topic, seconds=seconds, max_messages=1, max_payload_chars=0
+    )
     if not messages:
         return {
             "topic": topic, "valid": False, "errors": [
                 f"No retained message found on {topic} (waited {seconds}s)"
-            ], "warnings": [], "component": component, "config": None,
+            ], "warnings": [], "component": component,
         }
     payload = messages[0]["payload"]
     if not payload:
         return {
             "topic": topic, "valid": False, "errors": [
                 "Retained payload is empty (this is the HA convention for 'delete this entity')"
-            ], "warnings": [], "component": component, "config": None,
+            ], "warnings": [], "component": component,
         }
     try:
         cfg = json.loads(payload)
     except json.JSONDecodeError as exc:
         return {
             "topic": topic, "valid": False, "errors": [f"Invalid JSON: {exc}"],
-            "warnings": [], "component": component, "config": None,
+            "warnings": [], "component": component,
         }
     if not isinstance(cfg, dict):
-        return {
+        result: dict[str, Any] = {
             "topic": topic, "valid": False, "errors": [
                 f"Config must be a JSON object, got {type(cfg).__name__}"
-            ], "warnings": [], "component": component, "config": cfg,
+            ], "warnings": [], "component": component,
         }
+        if include_config:
+            result["config"] = cfg
+        return result
 
     shape = _validate_shape(component, cfg)
-    return {
+    result = {
         "topic": topic,
         "valid": not shape["errors"],
         "component": component,
         "entity_id": entity_id,
         "errors": shape["errors"],
         "warnings": shape["warnings"],
-        "config": cfg,
     }
+    if include_config:
+        result["config"] = cfg
+    return result

@@ -99,12 +99,38 @@ def test_status_staged_and_unstaged(repo: Path):
 
 
 @git_required
-def test_diff_working_tree(repo: Path):
+def test_diff_default_returns_stat(repo: Path):
+    """Default stat=True gives the cheap per-file numstat, not the full diff."""
     (repo / "README.md").write_text("hello world\n")
     d = git_ops.diff(repo)
+    assert d["stat"] is True
+    assert d["staged"] is False
+    paths = [f["path"] for f in d["files"]]
+    assert "README.md" in paths
+    # No "diff" key in stat mode — that's the whole point.
+    assert "diff" not in d
+
+
+@git_required
+def test_diff_full_mode(repo: Path):
+    (repo / "README.md").write_text("hello world\n")
+    d = git_ops.diff(repo, stat=False)
+    assert d["stat"] is False
     assert "diff --git" in d["diff"]
     assert "README.md" in d["diff"]
-    assert d["staged"] is False
+
+
+@git_required
+def test_diff_full_mode_truncates_over_cap(repo: Path):
+    """A big enough diff hits the max_bytes cap and is reported truncated."""
+    (repo / "big.txt").write_text("x\n")
+    _git(repo, "add", "big.txt")
+    _git(repo, "commit", "-q", "-m", "Add big.txt")
+    (repo / "big.txt").write_text("\n".join(f"line {i}" for i in range(2000)) + "\n")
+    d = git_ops.diff(repo, stat=False, max_bytes=512)
+    assert d["diff_truncated"] is True
+    assert d["diff_full_bytes"] > 512
+    assert len(d["diff"]) == 512
 
 
 @git_required
@@ -114,8 +140,8 @@ def test_diff_staged_only(repo: Path):
     # Now make a further unstaged change
     (repo / "README.md").write_text("hello world!\n")
 
-    staged = git_ops.diff(repo, staged=True)
-    working = git_ops.diff(repo, staged=False)
+    staged = git_ops.diff(repo, staged=True, stat=False)
+    working = git_ops.diff(repo, staged=False, stat=False)
     assert "hello world" in staged["diff"]
     assert staged["diff"] != working["diff"]
 
@@ -129,9 +155,12 @@ def test_diff_path_filter(repo: Path):
     (repo / "a.txt").write_text("ALPHA\n")
     (repo / "b.txt").write_text("BETA\n")
 
-    d = git_ops.diff(repo, path="a.txt")
+    d = git_ops.diff(repo, path="a.txt", stat=False)
     assert "a.txt" in d["diff"]
     assert "b.txt" not in d["diff"]
+
+    d_stat = git_ops.diff(repo, path="a.txt")
+    assert [f["path"] for f in d_stat["files"]] == ["a.txt"]
 
 
 # --- commit ---------------------------------------------------------------- #

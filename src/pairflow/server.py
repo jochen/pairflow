@@ -51,32 +51,52 @@ def build_server(config: Config) -> FastMCP:
     # ---- read ----------------------------------------------------------- #
 
     @mcp.tool
-    def nr_list_tabs() -> list[dict[str, Any]]:
-        """List all tabs (workspaces) in the Node-RED flows file."""
-        return flows.list_tabs(flows_file)
+    def nr_list_tabs(include_info: bool = False) -> list[dict[str, Any]]:
+        """List all tabs (workspaces) in the Node-RED flows file.
+
+        `include_info=True` adds each tab's markdown info notes; off by
+        default because those notes can be long.
+        """
+        return flows.list_tabs(flows_file, include_info=include_info)
 
     @mcp.tool
     def nr_list_nodes(
         tab_id: str | None = None,
         node_type: str | None = None,
         name_contains: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """List nodes with optional filters (tab_id, node_type, name_contains).
+        summary: bool | None = None,
+    ) -> dict[str, Any]:
+        """List nodes; returns either a summary or a filtered list.
 
-        Returns a compact view (id, type, name, tab, x, y, disabled). Use
-        nr_get_node for the full configuration of a specific node.
+        With no filter set, the default is a summary (counts per tab and
+        per node type) — calling it unfiltered on a 2000+ node flow would
+        otherwise dump a huge response. Pass any of `tab_id`, `node_type`,
+        `name_contains` to get the per-node list (compact: id, type, name,
+        tab, x, y, disabled). Use `nr_get_node` for the full config of a
+        single node.
+
+        `summary=False` forces the full list even without filters;
+        `summary=True` forces a summary even with filters.
         """
         return flows.list_nodes(
             flows_file,
             tab_id=tab_id,
             node_type=node_type,
             name_contains=name_contains,
+            summary=summary,
         )
 
     @mcp.tool
-    def nr_get_node(node_id: str) -> dict[str, Any] | None:
-        """Return the full JSON of a single node by id, or null if not found."""
-        return flows.get_node(flows_file, node_id)
+    def nr_get_node(node_id: str, code: str = "signatures") -> dict[str, Any] | None:
+        """Return a node by id, or null if not found.
+
+        For function nodes, `code` controls how the JS body is rendered:
+          * `"signatures"` (default) — replaces `func` with `func_summary`
+            (line/char count, first lines, declared helpers, node.on events).
+          * `"full"` — full body, useful when you need to edit it.
+          * `"omit"` — drop the body entirely.
+        """
+        return flows.get_node(flows_file, node_id, code=code)
 
     # ---- write ---------------------------------------------------------- #
 
@@ -206,18 +226,25 @@ def build_server(config: Config) -> FastMCP:
         seconds: float = 5.0,
         filter_substr: str | None = None,
         max_messages: int = 500,
+        max_msg_chars: int = 2000,
     ) -> list[dict[str, Any]]:
         """Stream the Node-RED debug sidebar over WebSocket for `seconds`.
 
         Returns a list of debug records, one per `node.warn()` / msg.payload
         trace that appeared in the window. `filter_substr` narrows to messages
         whose rendered text contains the substring (case-insensitive).
+
+        `max_msg_chars` caps the rendered `msg` field per record (default
+        2000); truncated records carry `msg_truncated: true` and the
+        original `msg_full_chars` so you can refetch with a higher cap.
+        Pass 0 to disable truncation.
         """
         return await nr_admin.tail_debug(
             config.node_red.admin_url,
             seconds=seconds,
             filter_substr=filter_substr,
             max_messages=max_messages,
+            max_msg_chars=max_msg_chars,
         )
 
     @mcp.tool
@@ -243,18 +270,24 @@ def build_server(config: Config) -> FastMCP:
         seconds: float = 5.0,
         max_messages: int = 100,
         broker: str = "default",
+        max_payload_chars: int = 2000,
     ) -> list[dict[str, Any]]:
         """Subscribe to `topic`, collect messages, disconnect.
 
         Returns when `max_messages` are received or `seconds` elapse,
         whichever comes first. `broker` selects a named broker from the
         Pairflow config; "default" uses [mqtt.default].
+
+        `max_payload_chars` caps decoded payloads per message (default
+        2000). Truncated records carry `payload_truncated: true` and the
+        original `payload_full_chars`. Pass 0 to disable truncation.
         """
         return await mqtt.sub_collect(
             config.broker(broker),
             topic=topic,
             seconds=seconds,
             max_messages=max_messages,
+            max_payload_chars=max_payload_chars,
         )
 
     @mcp.tool
@@ -288,6 +321,8 @@ def build_server(config: Config) -> FastMCP:
         filter_substr: str | None = None,
         max_debug: int = 100,
         max_mqtt: int = 100,
+        max_msg_chars: int = 2000,
+        max_payload_chars: int = 2000,
     ) -> dict[str, Any]:
         """Trigger an inject, watch debug + MQTT in one atomic call.
 
@@ -316,6 +351,8 @@ def build_server(config: Config) -> FastMCP:
             filter_substr=filter_substr,
             max_debug=max_debug,
             max_mqtt=max_mqtt,
+            max_msg_chars=max_msg_chars,
+            max_payload_chars=max_payload_chars,
         )
 
     @mcp.tool
@@ -328,6 +365,7 @@ def build_server(config: Config) -> FastMCP:
         pub_retain: bool = False,
         pub_qos: int = 0,
         broker: str = "default",
+        max_payload_chars: int = 2000,
     ) -> dict[str, Any]:
         """Subscribe to `observe_topics`, then publish, then collect on one
         connection.
@@ -352,6 +390,7 @@ def build_server(config: Config) -> FastMCP:
             max_messages=max_messages,
             pub_retain=pub_retain,
             pub_qos=pub_qos,
+            max_payload_chars=max_payload_chars,
         )
 
     # ============================================================ #
@@ -378,13 +417,29 @@ def build_server(config: Config) -> FastMCP:
         return git_ops.status(_project_dir())
 
     @mcp.tool
-    def git_diff(path: str | None = None, staged: bool = False) -> dict[str, Any]:
+    def git_diff(
+        path: str | None = None,
+        staged: bool = False,
+        stat: bool = True,
+        max_bytes: int = 16_000,
+    ) -> dict[str, Any]:
         """Diff of the working tree (or the index, if `staged=True`).
 
-        `path`: restrict to a single file. Without a path, the full diff is
-        returned, which can be large for a multi-megabyte flows.json.
+        `stat=True` (default) returns only per-file numstat (added/removed
+        line counts) — small even for huge flows.json edits. `stat=False`
+        returns the full unified diff, capped at `max_bytes` characters
+        (0 disables) with `diff_truncated` / `diff_full_bytes` set on
+        oversized responses.
+
+        `path`: restrict to a single file.
         """
-        return git_ops.diff(_project_dir(), path=path, staged=staged)
+        return git_ops.diff(
+            _project_dir(),
+            path=path,
+            staged=staged,
+            stat=stat,
+            max_bytes=max_bytes,
+        )
 
     @mcp.tool
     def git_log(count: int = 10) -> dict[str, Any]:
@@ -445,6 +500,7 @@ def build_server(config: Config) -> FastMCP:
         topic: str,
         seconds: float = 2.0,
         broker: str = "default",
+        include_config: bool = False,
     ) -> dict[str, Any]:
         """Validate the retained Discovery config at `topic`.
 
@@ -453,14 +509,16 @@ def build_server(config: Config) -> FastMCP:
         `device` (if present) is an object, and (for known components)
         at least one of the required topic-field groups is set.
 
-        Returns `{valid, errors, warnings, component, entity_id, config}`.
-        `errors` block validity; `warnings` are informational (e.g.,
-        unknown component, device without identifiers).
+        Returns `{valid, errors, warnings, component, entity_id}`. The
+        full parsed config is only included when `include_config=True` —
+        climate / light configs are large and the validation result is
+        usually enough on its own.
         """
         return await ha_discovery.validate_discovery(
             config.broker(broker),
             topic=topic,
             seconds=seconds,
+            include_config=include_config,
         )
 
     return mcp

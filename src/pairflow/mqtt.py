@@ -31,17 +31,51 @@ def _decode_payload(raw: bytes) -> str:
         return raw.hex()
 
 
+def _build_observed_record(
+    topic: Any,
+    payload: Any,
+    qos: Any,
+    retain: Any,
+    max_payload_chars: int,
+) -> dict[str, Any]:
+    """Shape a received MQTT message into the dict returned to callers.
+
+    Truncates the (already decoded) payload when it exceeds `max_payload_chars`
+    (0 disables) and tags the record with the original length, so the caller
+    can decide whether to re-fetch with a higher cap.
+    """
+    record: dict[str, Any] = {
+        "topic": str(topic),
+        "payload": payload,
+        "qos": int(qos),
+        "retain": bool(retain),
+    }
+    if (
+        max_payload_chars
+        and isinstance(payload, str)
+        and len(payload) > max_payload_chars
+    ):
+        record["payload"] = payload[:max_payload_chars]
+        record["payload_truncated"] = True
+        record["payload_full_chars"] = len(payload)
+    return record
+
+
 async def sub_collect(
     broker: BrokerConfig,
     topic: str,
     seconds: float,
     max_messages: int,
+    max_payload_chars: int = 2000,
 ) -> list[dict[str, Any]]:
     """Subscribe to `topic`, collect messages for `seconds` (or until
     `max_messages` are received, whichever comes first), then disconnect.
 
     Returns a list of `{topic, payload, qos, retain}` dicts. Payloads are
     decoded as UTF-8 where possible, otherwise returned as a hex string.
+    Each payload is truncated to `max_payload_chars` (0 disables) with a
+    `payload_truncated` flag + `payload_full_chars` field on oversized
+    records.
     """
     messages: list[dict[str, Any]] = []
 
@@ -50,12 +84,14 @@ async def sub_collect(
 
         async def _consume() -> None:
             async for m in client.messages:
-                messages.append({
-                    "topic": str(m.topic),
-                    "payload": _decode_payload(m.payload) if isinstance(m.payload, bytes) else m.payload,
-                    "qos": int(m.qos),
-                    "retain": bool(m.retain),
-                })
+                payload = (
+                    _decode_payload(m.payload)
+                    if isinstance(m.payload, bytes)
+                    else m.payload
+                )
+                messages.append(
+                    _build_observed_record(m.topic, payload, m.qos, m.retain, max_payload_chars)
+                )
                 if max_messages and len(messages) >= max_messages:
                     return
 
@@ -99,6 +135,7 @@ async def pub_and_observe(
     max_messages: int = 100,
     pub_retain: bool = False,
     pub_qos: int = 0,
+    max_payload_chars: int = 2000,
 ) -> dict[str, Any]:
     """Subscribe to `observe_topics`, then publish, then collect responses
     on a single connection.
@@ -129,12 +166,14 @@ async def pub_and_observe(
 
         async def _consume() -> None:
             async for m in client.messages:
-                messages.append({
-                    "topic": str(m.topic),
-                    "payload": _decode_payload(m.payload) if isinstance(m.payload, bytes) else m.payload,
-                    "qos": int(m.qos),
-                    "retain": bool(m.retain),
-                })
+                payload = (
+                    _decode_payload(m.payload)
+                    if isinstance(m.payload, bytes)
+                    else m.payload
+                )
+                messages.append(
+                    _build_observed_record(m.topic, payload, m.qos, m.retain, max_payload_chars)
+                )
                 if max_messages and len(messages) >= max_messages:
                     return
 

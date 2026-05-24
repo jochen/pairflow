@@ -66,6 +66,13 @@ A few conventions the codebase follows; please continue them in PRs:
 - **Function-node JS is validated before write, not after.** If you add a new write-path tool that can introduce a function body, route it through `_maybe_validate_function` or call `validate.validate_function` directly before the write commits.
 - **Tool docstrings are read by the AI client as part of the tool's contract.** Keep them precise about argument meaning, return shape, and side effects. Examples in docstrings are welcome.
 - **Filesystem operations live in `writer.py`.** Pure data mutations live in `flows.py`. JS validation lives in `validate.py`. The MCP wiring lives in `server.py`. New code should pick the smallest of those that fits.
+- **Response sizes are part of the API.** Every tool's worst-case response on real-world data (multi-thousand-node flows, retained-config storms, multi-MB diffs, big debug payloads) ends up in an AI client's context window, where it's counted in tokens. When you add or change a tool:
+  - Estimate the worst case. If a single call can dump tens of KB, that's a design problem, not a tuning problem.
+  - **Default to a cheap summary; make the full payload opt-in** via a flag (e.g. `summary=`, `stat=`, `include_config=`, `code="full"`).
+  - **Truncate per-record content** with explicit caps (`max_msg_chars`, `max_payload_chars`, `max_bytes`) and tag truncated records (`*_truncated: true`, `*_full_chars` / `*_full_bytes`) so the caller can refetch with a higher cap when it actually needs the data.
+  - **Never silently grow with input size.** A flow with 2000 nodes and a flow with 20 should produce comparable response sizes for the same tool call.
+
+  See `nr_list_nodes` (summary default), `nr_get_node` (code modes), `nr_tail_debug` / `mqtt_sub_collect` (per-record caps), and `git_diff` (stat default) for the pattern.
 
 ## Things that are out of scope for Pairflow itself
 
