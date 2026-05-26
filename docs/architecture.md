@@ -76,30 +76,35 @@ Use the log to answer questions like *"which tool dominates the token budget?"*,
 
 Tools are grouped by purpose. The grouping is descriptive, not technical — all tools live in one MCP server.
 
-### Tier 1 — Flow surgery
+### Tier 1 — Flow surgery + read/query
 
 Atomic, structured operations on the flows file. All write operations include backup and validation.
 
-- `nr_list_tabs()` → list of tabs with ids and labels
-- `nr_list_nodes(tab=, type=)` → filtered list of nodes
-- `nr_get_node(id)` → full node JSON
+- `nr_list_tabs(include_info=)` → list of tabs with ids and labels
+- `nr_list_nodes(tab_id=, node_type=, name_contains=, summary=)` → summary by default, full list when filtered
+- `nr_get_node(id, code=, include_sources=)` → node JSON; `include_sources=True` adds reverse-wires lookup
+- `nr_search_flows(query, fields=, regex=, …)` → global string/regex search across every string value in the document
+- `nr_list_dangling(tab_id=, types=)` → enumerate orphan link-in / link-out nodes with reason
 - `nr_add_node(tab, type, props, x, y)` → returns new node id
-- `nr_update_node(id, patch)` → partial update (jsonpatch-style)
-- `nr_delete_node(id)` → with cascading cleanup of dangling link references
+- `nr_update_node(id, patch, verbose=)` → partial update; `verbose=False` returns compact summary
+- `nr_delete_node(id, missing_ok=)` → with cascading cleanup; `missing_ok=True` for idempotent cleanup loops
 - `nr_wire(src_id, src_port, dst_id)`
 - `nr_unwire(src_id, src_port, dst_id)`
 - `nr_validate_function(code)` → syntax-only JS validation
-- `nr_deploy(mode="restart" | "reload")`
+- `nr_run_function(node_id, msg, timeout=)` → sandboxed execution of a function body via node subprocess; no deploy needed
 
 ### Tier 2 — Verification
 
 The primitives that close the "did it work?" loop.
 
+- `nr_deploy(wait_timeout=)` — systemctl restart + Admin-API readiness poll
 - `nr_inject(node_id)` — trigger an inject node via Admin API
-- `nr_tail_debug(seconds, filter=)` — open a WebSocket to the NR debug stream, collect entries for the given window, return as structured data
-- `nr_journal(lines, filter=)` — read recent systemd journal entries, optionally filtered for errors
-- `mqtt_sub_collect(topic, seconds, max_messages=, broker=)` — subscribe, collect, return
+- `nr_tail_debug(seconds, filter_substr=, max_msg_chars=)` — open a WebSocket to the NR debug stream, collect entries for the given window, return as structured data
+- `nr_journal(lines=, filter_regex=, max_bytes=)` — read recent systemd journal entries; oldest lines dropped if output exceeds `max_bytes`
+- `nr_trace_pipeline(trigger_inject, expect_topic=, seconds=, …)` — one atomic call: open WS + MQTT *then* fire the inject so reactions can't race the subscriptions
+- `mqtt_sub_collect(topic, seconds, max_messages=, broker=, max_payload_chars=)` — subscribe, collect, return
 - `mqtt_pub(topic, payload, retain=, broker=)`
+- `mqtt_pub_and_observe(pub_topic, pub_payload, observe_topics, …)` — race-free atomic subscribe-then-publish-then-collect on one connection
 
 ### Tier 3 — Workflow
 
