@@ -177,6 +177,47 @@ def test_validate_shape_set_position_satisfies_any_of():
     assert r["errors"] == []
 
 
+def test_validate_shape_accepts_ha_short_form_climate():
+    """Real-world: HA Discovery climate config using abbreviations
+    (temp_cmd_t etc.). Validator must accept these on equal footing with
+    the long-form names — HA's own MQTT integration does."""
+    cfg = {
+        "uniq_id": "grosseszimmer_climate",
+        "temp_cmd_t": "~/targetTempCmd",
+        "temp_stat_t": "~/targetTempState",
+        "curr_temp_t": "~/currentTemp",
+        "dev": {"identifiers": ["grosseszimmer"]},
+    }
+    r = ha_discovery._validate_shape("climate", cfg)
+    assert r["errors"] == []
+
+
+def test_validate_shape_short_form_cmd_t_satisfies_command_topic():
+    cfg = {"uniq_id": "x", "cmd_t": "x/set"}
+    r = ha_discovery._validate_shape("switch", cfg)
+    assert r["errors"] == []
+
+
+def test_validate_shape_short_form_type_check():
+    """Type check applies to the canonicalized field too — `cmd_t: []`
+    should still surface a type error against `command_topic`."""
+    cfg = {"uniq_id": "x", "cmd_t": ["x/set"]}
+    r = ha_discovery._validate_shape("switch", cfg)
+    assert any("command_topic" in e and "must be a string" in e for e in r["errors"])
+
+
+def test_validate_shape_long_form_wins_when_both_present():
+    """If both `command_topic` and `cmd_t` are set, the long-form value
+    should be the one validated (HA's behavior)."""
+    cfg = {
+        "uniq_id": "x",
+        "command_topic": "long/form",
+        "cmd_t": ["short", "form"],  # wrong type, but should be ignored
+    }
+    r = ha_discovery._validate_shape("switch", cfg)
+    assert r["errors"] == []
+
+
 # --- validate_discovery (full path with mocked mqtt) ---------------------- #
 
 

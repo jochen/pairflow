@@ -134,11 +134,64 @@ _TOPIC_FIELDS = {
 }
 
 
+# HA MQTT Discovery accepts a fixed set of field-name abbreviations
+# (homeassistant/components/mqtt/abbreviations.py). We normalize the few
+# that the validator actually inspects, so a config using e.g. `temp_cmd_t`
+# is accepted on equal footing with `temperature_command_topic`.
+_ABBREVIATIONS: dict[str, str] = {
+    "cmd_t": "command_topic",
+    "stat_t": "state_topic",
+    "pos_t": "position_topic",
+    "set_pos_t": "set_position_topic",
+    "tilt_cmd_t": "tilt_command_topic",
+    "tilt_status_t": "tilt_status_topic",
+    "avty_t": "availability_topic",
+    "json_attr_t": "json_attributes_topic",
+    "mode_cmd_t": "mode_command_topic",
+    "mode_stat_t": "mode_state_topic",
+    "temp_cmd_t": "temperature_command_topic",
+    "temp_stat_t": "temperature_state_topic",
+    "curr_temp_t": "current_temperature_topic",
+    "act_t": "action_topic",
+    "pr_mode_cmd_t": "preset_mode_command_topic",
+    "pr_mode_stat_t": "preset_mode_state_topic",
+    "swing_mode_cmd_t": "swing_mode_command_topic",
+    "swing_mode_stat_t": "swing_mode_state_topic",
+    "fan_mode_cmd_t": "fan_mode_command_topic",
+    "fan_mode_stat_t": "fan_mode_state_topic",
+    "bri_cmd_t": "brightness_command_topic",
+    "bri_stat_t": "brightness_state_topic",
+    "rgb_cmd_t": "rgb_command_topic",
+    "rgb_stat_t": "rgb_state_topic",
+    "clr_temp_cmd_t": "color_temp_command_topic",
+    "clr_temp_stat_t": "color_temp_state_topic",
+    "uniq_id": "unique_id",
+    "dev": "device",
+    "dev_cla": "device_class",
+}
+
+
+def _canonicalize(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Return a shallow copy with HA short-form keys rewritten to long-form.
+
+    If both forms are present the long-form wins (HA's behavior). The original
+    dict is left untouched.
+    """
+    out: dict[str, Any] = {}
+    for k, v in cfg.items():
+        long = _ABBREVIATIONS.get(k, k)
+        if long not in out:  # long-form already taken → long-form wins
+            out[long] = v
+    return out
+
+
 def _validate_shape(component: str, cfg: dict[str, Any]) -> dict[str, Any]:
     errors: list[str] = []
     warnings: list[str] = []
 
-    if not (cfg.get("unique_id") or cfg.get("uniq_id")):
+    cfg = _canonicalize(cfg)
+
+    if not cfg.get("unique_id"):
         errors.append(
             "Missing 'unique_id' — HA cannot persist this entity across restarts "
             "without one, and duplicate-detection won't work."
