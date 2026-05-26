@@ -67,8 +67,8 @@ def atomic_write(
     )
     tmp_path = Path(tmp_path_str)
     try:
-        with os.fdopen(tmp_fd, "w") as f:
-            json.dump(data, f, indent=4)
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
             f.write("\n")
         # Preserve permissions of the original file on the new one
         shutil.copymode(flows_file, tmp_path)
