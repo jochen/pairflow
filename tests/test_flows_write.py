@@ -146,6 +146,20 @@ def test_delete_node_missing(fw: Path):
         flows.delete_node(fw, "nope")
 
 
+def test_delete_node_missing_ok_returns_not_found(fw: Path):
+    """missing_ok=True turns a stale-id call into a clean no-op."""
+    result = flows.delete_node(fw, "definitely-not-there", missing_ok=True)
+    assert result == {"deleted": None, "references_removed": 0, "found": False}
+
+
+def test_delete_node_missing_ok_still_deletes_when_present(fw: Path):
+    """missing_ok=True only changes the not-found path, not the success path."""
+    result = flows.delete_node(fw, "fn", missing_ok=True)
+    assert result["deleted"]["id"] == "fn"
+    assert result["references_removed"] == 1
+    assert "found" not in result  # success path unchanged
+
+
 # ---- wire / unwire --------------------------------------------------------- #
 
 

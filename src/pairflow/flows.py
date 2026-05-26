@@ -352,15 +352,28 @@ def update_node(
     return candidate
 
 
-def delete_node(flows_file: Path, node_id: str) -> dict[str, Any]:
+def delete_node(
+    flows_file: Path,
+    node_id: str,
+    missing_ok: bool = False,
+) -> dict[str, Any]:
     """Delete the node with `node_id` and clean up references in other nodes.
 
     Returns a summary: the deleted node, plus the count of wire/link references
     that were removed elsewhere.
+
+    With `missing_ok=True`, a non-existent id returns
+    `{deleted: None, references_removed: 0, found: False}` instead of raising
+    `KeyError` — useful for cleanup loops over stale id lists.
     """
     mtime = current_mtime(flows_file)
     data = _read(flows_file)
-    idx = _find_index(data, node_id)
+    try:
+        idx = _find_index(data, node_id)
+    except KeyError:
+        if missing_ok:
+            return {"deleted": None, "references_removed": 0, "found": False}
+        raise
     deleted = data.pop(idx)
 
     removed_refs = 0

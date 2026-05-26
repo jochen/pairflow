@@ -135,9 +135,14 @@ def build_server(config: Config) -> FastMCP:
         return flows.update_node(flows_file, node_id, patch)
 
     @tool
-    def nr_delete_node(node_id: str) -> dict[str, Any]:
-        """Delete a node and clean up wire/link references in other nodes."""
-        return flows.delete_node(flows_file, node_id)
+    def nr_delete_node(node_id: str, missing_ok: bool = False) -> dict[str, Any]:
+        """Delete a node and clean up wire/link references in other nodes.
+
+        With `missing_ok=True`, a non-existent id returns
+        `{deleted: null, references_removed: 0, found: false}` instead of
+        raising — useful for cleanup loops over stale id lists.
+        """
+        return flows.delete_node(flows_file, node_id, missing_ok=missing_ok)
 
     @tool
     def nr_wire(src_id: str, src_port: int, dst_id: str) -> dict[str, Any]:
