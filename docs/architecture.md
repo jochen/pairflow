@@ -53,6 +53,7 @@ Pairflow's reads therefore default to summaries; the full payload is opt-in:
 - `nr_list_tabs` omits each tab's `info` notes unless `include_info=True`.
 - `git_diff` returns numstat (per-file added/removed counts) unless `stat=False`; full diffs above `max_bytes` are truncated with a `diff_truncated` flag.
 - `nr_tail_debug` and `mqtt_sub_collect` truncate per-record payloads at `max_msg_chars` / `max_payload_chars` and tag truncated records with the original length so a follow-up call can refetch with a higher cap.
+- `nr_journal` caps the total bytes of returned lines at `max_bytes` (default 8000), dropping the oldest matched lines first; truncated responses carry `output_truncated: true` and `output_full_bytes`.
 - `ha_discovery_validate` returns only the validation verdict unless `include_config=True`.
 
 This is a load-bearing convention, not a style preference — see CONTRIBUTING.md for the rule new tools must follow.

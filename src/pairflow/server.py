@@ -260,17 +260,24 @@ def build_server(config: Config) -> FastMCP:
     def nr_journal(
         lines: int = 100,
         filter_regex: str | None = None,
+        max_bytes: int = 8000,
     ) -> dict[str, Any]:
         """Read recent systemd journal entries for the Node-RED service.
 
         `filter_regex` is a Python regular expression applied per line.
         The result reports both lines_read (total) and lines_matched
         (after filter) so an over-narrow filter is obvious.
+
+        `max_bytes` (default 8000) caps the total bytes of returned `lines`
+        content. When exceeded, the oldest matched lines are dropped and
+        `output_truncated: true` + `output_full_bytes` are set. Pass `0`
+        to disable.
         """
         return service.journal(
             config.node_red.service,
             lines=lines,
             filter_regex=filter_regex,
+            max_bytes=max_bytes,
         )
 
     @tool

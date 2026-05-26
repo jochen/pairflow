@@ -87,12 +87,18 @@ def journal(
     service: str,
     lines: int = 100,
     filter_regex: str | None = None,
+    max_bytes: int = 8000,
 ) -> dict[str, Any]:
     """Return recent journalctl output for `service`.
 
     `filter_regex`: Python `re` pattern; only lines matching are returned.
     The full unfiltered line count is also reported so callers can tell
     whether their filter is overly narrow.
+
+    `max_bytes` caps the total bytes of returned `lines` content. When the
+    joined output exceeds the cap, the *oldest* matched lines are dropped
+    (the most recent are what's usually wanted) and `output_truncated: true`
+    + `output_full_bytes` are set. Pass `0` to disable.
     """
     cmd = [
         "journalctl",
@@ -118,9 +124,27 @@ def journal(
     else:
         matched = all_lines
 
-    return {
+    result: dict[str, Any] = {
         "service": service,
         "lines_read": len(all_lines),
         "lines_matched": len(matched),
         "lines": matched,
     }
+
+    if max_bytes:
+        full_bytes = sum(len(ln) + 1 for ln in matched)  # +1 for separator
+        if full_bytes > max_bytes:
+            kept: list[str] = []
+            acc = 0
+            for ln in reversed(matched):
+                sz = len(ln) + 1
+                if acc + sz > max_bytes:
+                    break
+                acc += sz
+                kept.append(ln)
+            kept.reverse()
+            result["lines"] = kept
+            result["output_truncated"] = True
+            result["output_full_bytes"] = full_bytes
+
+    return result

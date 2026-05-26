@@ -113,3 +113,37 @@ def test_journal_command_failure():
     ):
         with pytest.raises(RuntimeError, match="journalctl"):
             service.journal("does-not-exist")
+
+
+def test_journal_truncates_over_max_bytes_keeps_newest():
+    """Over the cap, oldest lines drop, newest are retained (= the
+    'what just happened' end of the journal is what callers want)."""
+    sample = "\n".join(f"line {i:03d} " + "x" * 50 for i in range(40))
+    with patch("pairflow.service.subprocess.run", return_value=_proc(0, stdout=sample)):
+        r = service.journal("nodered", lines=40, max_bytes=500)
+    assert r["lines_read"] == 40
+    assert r["lines_matched"] == 40
+    assert r["output_truncated"] is True
+    assert r["output_full_bytes"] > 500
+    joined = "\n".join(r["lines"])
+    assert len(joined) <= 500
+    # Newest line preserved, oldest dropped
+    assert "line 039" in r["lines"][-1]
+    assert "line 000" not in joined
+
+
+def test_journal_no_truncation_when_under_cap():
+    sample = "short line A\nshort line B"
+    with patch("pairflow.service.subprocess.run", return_value=_proc(0, stdout=sample)):
+        r = service.journal("nodered", lines=10, max_bytes=8000)
+    assert "output_truncated" not in r
+    assert "output_full_bytes" not in r
+    assert len(r["lines"]) == 2
+
+
+def test_journal_max_bytes_zero_disables_cap():
+    sample = "\n".join(f"line {i:03d} " + "x" * 50 for i in range(40))
+    with patch("pairflow.service.subprocess.run", return_value=_proc(0, stdout=sample)):
+        r = service.journal("nodered", lines=40, max_bytes=0)
+    assert "output_truncated" not in r
+    assert len(r["lines"]) == 40
