@@ -167,3 +167,116 @@ def test_get_node_rejects_unknown_code_mode(tiny_flows: Path):
 
 def test_get_node_missing(tiny_flows: Path):
     assert flows.get_node(tiny_flows, "does-not-exist") is None
+
+
+# --------------------------------------------------------------------------- #
+# list_dangling tests                                                           #
+# --------------------------------------------------------------------------- #
+
+
+def _make_link_flows(tmp_path: Path, nodes: list[dict]) -> Path:
+    """Write a minimal flows.json with one tab and the given extra nodes."""
+    data: list[dict] = [{"id": "tab1", "type": "tab", "label": "T"}] + nodes
+    p = tmp_path / "flows.json"
+    p.write_text(json.dumps(data))
+    return p
+
+
+def test_list_dangling_clean_repo_returns_empty(tmp_path: Path):
+    """A properly wired link pair should not appear in the dangling report."""
+    # link-out references link-in and vice-versa (both .links populated).
+    nodes = [
+        {"id": "lo1", "type": "link out", "z": "tab1", "name": "out", "links": ["li1"], "wires": []},
+        {"id": "li1", "type": "link in",  "z": "tab1", "name": "in",  "links": ["lo1"], "wires": []},
+    ]
+    p = _make_link_flows(tmp_path, nodes)
+    result = flows.list_dangling(p)
+    assert result["dangling_count"] == 0
+    assert result["dangling"] == []
+    assert result["total_checked"] == 2
+
+
+def test_list_dangling_link_out_with_empty_links(tmp_path: Path):
+    """link-out with an empty .links list is dangling."""
+    nodes = [
+        {"id": "lo1", "type": "link out", "z": "tab1", "name": "orphan-out", "links": [], "wires": []},
+    ]
+    p = _make_link_flows(tmp_path, nodes)
+    result = flows.list_dangling(p)
+    assert result["dangling_count"] == 1
+    entry = result["dangling"][0]
+    assert entry["node_id"] == "lo1"
+    assert entry["reason"] == "link_out_empty_links"
+    assert entry["broken_peers"] == []
+
+
+def test_list_dangling_link_out_with_dead_peer(tmp_path: Path):
+    """link-out whose .links all point at non-existent ids → all_peers_missing."""
+    nodes = [
+        {"id": "lo1", "type": "link out", "z": "tab1", "name": "dead-out",
+         "links": ["ghost1", "ghost2"], "wires": []},
+    ]
+    p = _make_link_flows(tmp_path, nodes)
+    result = flows.list_dangling(p)
+    assert result["dangling_count"] == 1
+    entry = result["dangling"][0]
+    assert entry["node_id"] == "lo1"
+    assert entry["reason"] == "all_peers_missing"
+    assert set(entry["broken_peers"]) == {"ghost1", "ghost2"}
+
+
+def test_list_dangling_link_in_with_no_source(tmp_path: Path):
+    """link-in that no link-out references → link_in_no_source."""
+    nodes = [
+        {"id": "li1", "type": "link in", "z": "tab1", "name": "lonely-in",
+         "links": [], "wires": []},
+    ]
+    p = _make_link_flows(tmp_path, nodes)
+    result = flows.list_dangling(p)
+    assert result["dangling_count"] == 1
+    entry = result["dangling"][0]
+    assert entry["node_id"] == "li1"
+    assert entry["reason"] == "link_in_no_source"
+    assert entry["broken_peers"] == []
+
+
+def test_list_dangling_link_in_with_dead_peer_in_links(tmp_path: Path):
+    """link-in whose own .links all point at ghosts → all_peers_missing (takes priority)."""
+    nodes = [
+        # lo1 points at li1 so it wouldn't be link_in_no_source — but li1's
+        # own .links contains a dead id, which should be caught first.
+        {"id": "lo1", "type": "link out", "z": "tab1", "name": "out",
+         "links": ["li1"], "wires": []},
+        {"id": "li1", "type": "link in",  "z": "tab1", "name": "broken-in",
+         "links": ["ghost99"], "wires": []},
+    ]
+    p = _make_link_flows(tmp_path, nodes)
+    result = flows.list_dangling(p)
+    # lo1 is clean (lo1.links = [li1] which exists); li1.links = [ghost99] → dangling
+    dangling_ids = {e["node_id"] for e in result["dangling"]}
+    assert "li1" in dangling_ids
+    li1_entry = next(e for e in result["dangling"] if e["node_id"] == "li1")
+    assert li1_entry["reason"] == "all_peers_missing"
+    assert li1_entry["broken_peers"] == ["ghost99"]
+
+
+def test_list_dangling_tab_filter(tmp_path: Path):
+    """Dangling nodes on a different tab are ignored when tab_id is given."""
+    data = [
+        {"id": "tab1", "type": "tab", "label": "A"},
+        {"id": "tab2", "type": "tab", "label": "B"},
+        # Dangling link-out on tab1
+        {"id": "lo_t1", "type": "link out", "z": "tab1", "name": "dangling-on-t1",
+         "links": [], "wires": []},
+        # Dangling link-out on tab2
+        {"id": "lo_t2", "type": "link out", "z": "tab2", "name": "dangling-on-t2",
+         "links": [], "wires": []},
+    ]
+    p = tmp_path / "flows.json"
+    p.write_text(json.dumps(data))
+
+    result = flows.list_dangling(p, tab_id="tab1")
+    assert result["tab_id"] == "tab1"
+    assert result["total_checked"] == 1
+    assert result["dangling_count"] == 1
+    assert result["dangling"][0]["node_id"] == "lo_t1"
