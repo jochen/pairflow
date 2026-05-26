@@ -436,6 +436,130 @@ def list_dangling(
 
 
 # --------------------------------------------------------------------------- #
+# Search                                                                       #
+# --------------------------------------------------------------------------- #
+
+
+def search_flows(
+    flows_file: "Path",
+    query: str,
+    fields: "list[str] | None" = None,
+    regex: bool = False,
+    case_sensitive: bool = False,
+    max_matches: int = 100,
+    max_snippet_chars: int = 120,
+) -> "dict[str, Any]":
+    """Global string search over the flows.json document.
+
+    Walks every node in the document and recursively visits all string values,
+    matching against `query`.  Substring match by default; set `regex=True` to
+    use a Python `re.search` pattern.  Matching is case-insensitive by default;
+    set `case_sensitive=True` to override.
+
+    `fields` restricts matching to string values whose parent key name (the
+    final segment of the field path, or the parent key for list elements) is in
+    the set.  E.g. ``fields=["func"]`` searches only function-node bodies at
+    *any* depth.  Pass ``None`` (default) to search every string value.
+
+    Returns::
+
+        {
+            "query": str,
+            "regex": bool,
+            "total_matches": int,     # actual count (may exceed max_matches)
+            "returned": int,          # number of matches in the payload
+            "truncated": bool,        # True iff total_matches > max_matches
+            "matches": [
+                {
+                    "node_id": str | None,
+                    "type": str | None,
+                    "name": str | None,
+                    "tab": str | None,
+                    "field_path": str,        # e.g. "func", "rules[3].t"
+                    "snippet": str,
+                    "snippet_truncated": bool,
+                    "snippet_full_chars": int,  # only when snippet_truncated
+                },
+                ...
+            ],
+        }
+    """
+    if not query:
+        raise ValueError("query must not be empty")
+
+    if regex:
+        flags = 0 if case_sensitive else re.IGNORECASE
+        try:
+            pattern = re.compile(query, flags)
+        except re.error as exc:
+            raise ValueError(f"Invalid regex {query!r}: {exc}") from exc
+
+        def _matches(s: str) -> bool:
+            return bool(pattern.search(s))
+    else:
+        needle = query if case_sensitive else query.lower()
+
+        def _matches(s: str) -> bool:
+            hay = s if case_sensitive else s.lower()
+            return needle in hay
+
+    field_set: set[str] | None = set(fields) if fields is not None else None
+
+    data = _read(flows_file)
+
+    total = 0
+    matches: list[dict[str, Any]] = []
+
+    def _collect(node: dict[str, Any], value: Any, path: str, parent_key: str | None) -> None:
+        nonlocal total
+        if isinstance(value, str):
+            if field_set is not None and parent_key not in field_set:
+                return
+            if not _matches(value):
+                return
+            total += 1
+            if len(matches) < max_matches:
+                rec: dict[str, Any] = {
+                    "node_id": node.get("id"),
+                    "type": node.get("type"),
+                    "name": node.get("name"),
+                    "tab": node.get("z"),
+                    "field_path": path,
+                    "snippet": value,
+                    "snippet_truncated": False,
+                }
+                full_len = len(value)
+                if max_snippet_chars and full_len > max_snippet_chars:
+                    rec["snippet"] = value[:max_snippet_chars]
+                    rec["snippet_truncated"] = True
+                    rec["snippet_full_chars"] = full_len
+                matches.append(rec)
+        elif isinstance(value, dict):
+            for k, v in value.items():
+                child_path = f"{path}.{k}" if path else k
+                _collect(node, v, child_path, k)
+        elif isinstance(value, list):
+            for i, v in enumerate(value):
+                child_path = f"{path}[{i}]"
+                # For list elements we inherit the parent key so that
+                # fields=["links"] matches items inside a links array.
+                _collect(node, v, child_path, parent_key)
+
+    for node in data:
+        for key, val in node.items():
+            _collect(node, val, key, key)
+
+    return {
+        "query": query,
+        "regex": regex,
+        "total_matches": total,
+        "returned": len(matches),
+        "truncated": total > max_matches,
+        "matches": matches,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Write                                                                        #
 # --------------------------------------------------------------------------- #
 

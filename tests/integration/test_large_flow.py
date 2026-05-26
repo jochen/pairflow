@@ -181,6 +181,50 @@ def test_update_rejects_invalid_function_body_mid_bulk(large_flows: Path):
     assert untouched["func"] != "if (true) {\nreturn"
 
 
+# --- search ------------------------------------------------------------------#
+
+
+def test_search_flows_at_scale(large_flows: Path, large_flows_stats: dict):
+    """search_flows works correctly on the full 200-node synthetic fixture."""
+    # 1. Broad query: "sensors/" appears in many topic and func fields.
+    result = flows.search_flows(large_flows, query="sensors/")
+    assert result["total_matches"] >= 1
+    assert len(result["matches"]) <= result["total_matches"]
+    # Every match record has the required shape keys.
+    for m in result["matches"]:
+        assert "node_id" in m
+        assert "field_path" in m
+        assert "snippet" in m
+        assert "snippet_truncated" in m
+
+    # 2. Field restriction: topics only.
+    topic_result = flows.search_flows(large_flows, query="sensors/", fields=["topic"])
+    assert topic_result["total_matches"] >= 1
+    assert all(m["field_path"] == "topic" for m in topic_result["matches"])
+
+    # 3. max_matches cap: cap at 5, verify truncation accounting is correct.
+    capped = flows.search_flows(large_flows, query="sensors/", max_matches=5)
+    assert capped["returned"] == min(5, capped["total_matches"])
+    if capped["total_matches"] > 5:
+        assert capped["truncated"] is True
+        assert capped["returned"] == 5
+
+    # 4. Regex mode: find node-ids that look like 16-char hex strings in links.
+    hex_result = flows.search_flows(
+        large_flows, query=r"^[0-9a-f]{16}$", regex=True, fields=["links"]
+    )
+    # The fixture populates some dangling link ids; at least one should match.
+    assert hex_result["total_matches"] >= 1
+
+    # 5. Snippet cap fires on the longer function bodies.
+    snippet_result = flows.search_flows(
+        large_flows, query="msg.payload", fields=["func"], max_snippet_chars=30
+    )
+    if snippet_result["total_matches"] > 0:
+        trunc = [m for m in snippet_result["matches"] if m["snippet_truncated"]]
+        assert len(trunc) > 0, "Expected at least one truncated snippet from a func body"
+
+
 # --- safety nets -------------------------------------------------------------#
 
 

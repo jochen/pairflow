@@ -169,6 +169,89 @@ def build_server(config: Config) -> FastMCP:
         """
         return flows.list_dangling(flows_file, tab_id=tab_id, types=types)
 
+    @tool
+    def nr_search_flows(
+        query: str,
+        fields: list[str] | None = None,
+        regex: bool = False,
+        case_sensitive: bool = False,
+        max_matches: int = 100,
+        max_snippet_chars: int = 120,
+    ) -> dict[str, Any]:
+        """Search all string values in the flows.json document.
+
+        Walks every node recursively and matches `query` against every string
+        field — function bodies (`func`), MQTT topics, switch/change rules,
+        template payloads, node-id references in `links` arrays, etc.
+
+        By default: substring match, case-insensitive, first 100 matches, up
+        to 120 characters of snippet context per match.
+
+        **Parameters**
+
+        * `query` — the search term (must be non-empty).
+        * `fields` — restrict to specific field names only, matched at any
+          depth.  E.g. ``["func"]`` searches only function-node bodies;
+          ``["topic"]`` searches only topic fields; ``["links"]`` searches ids
+          inside link arrays.  ``null`` (default) searches all string fields.
+        * `regex` — treat `query` as a Python ``re.search`` pattern.  An
+          invalid pattern raises an error immediately.
+        * `case_sensitive` — default ``false`` (case-insensitive).
+        * `max_matches` — cap on returned match objects (default 100); when
+          the real count exceeds this, `truncated` is set and `total_matches`
+          reports the full count so you can narrow the query or raise the cap.
+        * `max_snippet_chars` — cap on the `snippet` string per match (default
+          120).  When the matched value is longer, `snippet_truncated: true` and
+          `snippet_full_chars` are set.  Pass ``0`` to disable truncation.
+
+        **Return shape**
+
+        ```json
+        {
+          "query": "...",
+          "regex": false,
+          "total_matches": 7,
+          "returned": 7,
+          "truncated": false,
+          "matches": [
+            {
+              "node_id": "a1b2c3d4e5f6a1b2",
+              "type": "function",
+              "name": "Format sensor",
+              "tab": "tab-id-here",
+              "field_path": "func",
+              "snippet": "...matched text...",
+              "snippet_truncated": false
+            },
+            ...
+          ]
+        }
+        ```
+
+        **Examples**
+
+        Search for a specific MQTT topic fragment across all node types:
+        ``nr_search_flows(query="sensors/climate")``
+
+        Find all function nodes that reference `msg.topic`:
+        ``nr_search_flows(query="msg.topic", fields=["func"])``
+
+        Locate a node by its id appearing in a `links` array:
+        ``nr_search_flows(query="a1b2c3d4e5f6a1b2", fields=["links"])``
+
+        Use a regex to find any `payload` that looks like a float:
+        ``nr_search_flows(query=r"\\d+\\.\\d+", regex=True, fields=["payload"])``
+        """
+        return flows.search_flows(
+            flows_file,
+            query=query,
+            fields=fields,
+            regex=regex,
+            case_sensitive=case_sensitive,
+            max_matches=max_matches,
+            max_snippet_chars=max_snippet_chars,
+        )
+
     # ---- write ---------------------------------------------------------- #
 
     @tool
