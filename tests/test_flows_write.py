@@ -122,6 +122,39 @@ def test_update_node_missing(fw: Path):
         flows.update_node(fw, "nope", {"name": "x"})
 
 
+def test_update_node_debug_active_returns_deploy_hint(fw: Path):
+    """Patching active on a debug node surfaces the deploy-reminder hint."""
+    result = flows.update_node(fw, "dbg", {"active": True})
+    assert "hint" in result
+    assert "nr_deploy" in result["hint"]
+
+
+def test_update_node_debug_active_no_hint_when_active_not_in_patch(fw: Path):
+    """Patching a debug node's name (not active) must not add the hint."""
+    result = flows.update_node(fw, "dbg", {"name": "silent"})
+    assert "hint" not in result
+
+
+def test_update_node_non_debug_no_hint(fw: Path):
+    """Patching active on a non-debug node must not add the hint."""
+    result = flows.update_node(fw, "inj", {"active": True})
+    assert "hint" not in result
+
+
+def test_update_node_verbose_false_returns_summary_only(fw: Path):
+    """verbose=False returns compact {ok, node_id, applied_keys} with no node body."""
+    result = flows.update_node(fw, "dbg", {"name": "compact"}, verbose=False)
+    assert result == {"ok": True, "node_id": "dbg", "applied_keys": ["name"]}
+
+
+def test_update_node_verbose_true_default_unchanged(fw: Path):
+    """Default (verbose=True) still returns the full post-patch node body."""
+    result = flows.update_node(fw, "dbg", {"name": "verbose"})
+    assert result["name"] == "verbose"
+    assert result["type"] == "debug"
+    assert result["id"] == "dbg"
+
+
 # ---- delete_node ----------------------------------------------------------- #
 
 

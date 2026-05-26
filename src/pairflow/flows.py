@@ -327,11 +327,20 @@ def update_node(
     flows_file: Path,
     node_id: str,
     patch: dict[str, Any],
+    verbose: bool = True,
 ) -> dict[str, Any]:
     """Apply a shallow patch to the node with `node_id`.
 
     For function nodes, if `func` is in the patch, the new body is
     syntax-checked before the write.
+
+    When ``verbose=False``, returns a compact summary
+    ``{ok, node_id, applied_keys}`` instead of the full post-patch node.
+    Default is ``True`` (full node) for backward compatibility.
+
+    When the patch toggles ``active`` on a ``debug``-type node, the result
+    includes a ``hint`` reminding the caller that the change only takes effect
+    after ``nr_deploy``.
     """
     mtime = current_mtime(flows_file)
     data = _read(flows_file)
@@ -349,7 +358,14 @@ def update_node(
 
     data[idx] = candidate
     atomic_write(flows_file, data, expected_mtime=mtime)
-    return candidate
+
+    if not verbose:
+        return {"ok": True, "node_id": node_id, "applied_keys": list(patch.keys())}
+
+    result: dict[str, Any] = dict(candidate)
+    if candidate.get("type", "").startswith("debug") and "active" in patch:
+        result["hint"] = "Toggling debug 'active' takes effect only after nr_deploy."
+    return result
 
 
 def delete_node(

@@ -130,9 +130,23 @@ def build_server(config: Config) -> FastMCP:
         )
 
     @tool
-    def nr_update_node(node_id: str, patch: dict[str, Any]) -> dict[str, Any]:
-        """Apply a shallow patch to a node. id/type/z are not patchable."""
-        return flows.update_node(flows_file, node_id, patch)
+    def nr_update_node(
+        node_id: str,
+        patch: dict[str, Any],
+        verbose: bool = True,
+    ) -> dict[str, Any]:
+        """Apply a shallow patch to a node. id/type/z are not patchable.
+
+        ``verbose=True`` (default) returns the full post-patch node body.
+        ``verbose=False`` returns only ``{ok, node_id, applied_keys}`` — useful
+        in auto-refactor loops where the full body is not needed and token cost
+        matters.
+
+        When ``active`` is patched on a ``debug``-type node, the verbose
+        response includes a ``hint`` key reminding you to call ``nr_deploy``
+        for the change to take effect.
+        """
+        return flows.update_node(flows_file, node_id, patch, verbose=verbose)
 
     @tool
     def nr_delete_node(node_id: str, missing_ok: bool = False) -> dict[str, Any]:
