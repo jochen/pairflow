@@ -116,6 +116,59 @@ def build_server(config: Config) -> FastMCP:
         """
         return flows.get_node(flows_file, node_id, code=code, include_sources=include_sources)
 
+    @tool
+    def nr_list_dangling(
+        tab_id: str | None = None,
+        types: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Find dangling link nodes — link-ins with no source or dead peers,
+        link-outs with empty or all-missing peer lists.
+
+        Useful during refactor work to answer "are there orphan link-ins (no
+        source) or orphan link-outs (no target) on this tab?" without running
+        the full doctor pipeline.
+
+        `tab_id`: restrict the scan to one tab; default scans all tabs.
+
+        `types`: which node kinds to check; default is both
+        ``["link in", "link out"]``. Pass a single-element list to limit to
+        one kind.
+
+        **Dangling rules:**
+
+        * ``link out`` — dangling if ``.links`` is absent (``no_links_field``),
+          empty (``link_out_empty_links``), or every listed peer id is missing
+          from the flow (``all_peers_missing``).
+        * ``link in`` — dangling if every id in its own ``.links`` is missing
+          (``all_peers_missing``), *or* if no ``link out`` anywhere references
+          this node's id (``link_in_no_source``).  The first failing rule wins.
+
+        Response shape::
+
+            {
+                "tab_id": str | null,
+                "total_checked": int,
+                "dangling_count": int,
+                "dangling": [
+                    {
+                        "node_id": str,
+                        "type": "link in" | "link out",
+                        "name": str,
+                        "tab": str | null,
+                        "reason": "no_links_field" | "link_out_empty_links"
+                                  | "all_peers_missing" | "link_in_no_source",
+                        "broken_peers": [str, ...],
+                    },
+                    ...
+                ],
+            }
+
+        Response size is bounded: only link-node entries are included (typically
+        a small fraction of the total flow), and ``broken_peers`` lists only the
+        missing ids, not full node objects.
+        """
+        return flows.list_dangling(flows_file, tab_id=tab_id, types=types)
+
     # ---- write ---------------------------------------------------------- #
 
     @tool

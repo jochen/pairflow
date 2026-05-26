@@ -330,8 +330,8 @@ def test_build_server_tools_retain_parameter_schema(tmp_path: Path):
     tools = asyncio.run(server.list_tools())
     by_name = {t.name: t for t in tools}
 
-    # All 24 tools registered.
-    assert len(tools) == 24
+    # All 25 tools registered.
+    assert len(tools) == 25
 
     # A canonical sync tool: nr_list_tabs(include_info: bool = False)
     p = by_name["nr_list_tabs"].parameters

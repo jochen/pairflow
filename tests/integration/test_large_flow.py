@@ -48,6 +48,28 @@ def test_fixture_contains_dangling_link_refs(large_flows: Path):
     assert dangling > 0
 
 
+def test_list_dangling_finds_dangling_on_large_flow(large_flows: Path):
+    """nr_list_dangling (flows.list_dangling) surfaces the intentional dangling refs."""
+    result = flows.list_dangling(large_flows)
+    # The fixture seeds dangling link-in refs (30% chance each link-in node).
+    # Additionally, all link-out nodes are created with empty .links, so they
+    # are dangling as well.
+    assert result["dangling_count"] > 0
+    # Response shape is correct.
+    assert "tab_id" in result
+    assert "total_checked" in result
+    assert result["total_checked"] >= result["dangling_count"]
+    for entry in result["dangling"]:
+        assert entry["node_id"]
+        assert entry["type"] in ("link in", "link out")
+        assert entry["reason"] in (
+            "no_links_field", "link_out_empty_links", "all_peers_missing", "link_in_no_source"
+        )
+        assert isinstance(entry["broken_peers"], list)
+    # tab_id=None when not filtered.
+    assert result["tab_id"] is None
+
+
 # --- reads -------------------------------------------------------------------#
 
 

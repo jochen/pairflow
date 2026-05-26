@@ -327,6 +327,114 @@ def _summarize_function_body(code: str) -> dict[str, Any]:
     }
 
 
+def list_dangling(
+    flows_file: Path,
+    tab_id: str | None = None,
+    types: list[str] | None = None,
+) -> dict[str, Any]:
+    """Find dangling link nodes (link in / link out with broken or missing peers).
+
+    Scans nodes matching `types` (default: both ``"link in"`` and ``"link out"``),
+    optionally restricted to `tab_id`, and reports nodes that are dangling.
+
+    Semantics:
+
+    * **link out** — dangling if ``.links`` is absent/empty, or all listed
+      peer ids point at nodes that don't exist (``all_peers_missing``).
+    * **link in** — dangling if its own ``.links`` lists ids that don't exist
+      (``all_peers_missing``), *or* if no ``link out`` node's ``.links``
+      references this node's id (``link_in_no_source``).  The first failing
+      rule wins; only one ``reason`` is reported per node.
+
+    Return shape::
+
+        {
+            "tab_id": tab_id,            # None when not filtered
+            "total_checked": int,        # nodes matching types (in scope)
+            "dangling_count": int,
+            "dangling": [
+                {
+                    "node_id": str,
+                    "type": str,         # "link in" or "link out"
+                    "name": str,
+                    "tab": str | None,   # z field
+                    "reason": str,       # "no_links_field" | "all_peers_missing"
+                                         # | "link_in_no_source" | "link_out_empty_links"
+                    "broken_peers": list[str],  # ids in .links that don't exist
+                },
+                ...
+            ],
+        }
+    """
+    if types is None:
+        types = ["link in", "link out"]
+    types_set = set(types)
+
+    raw = _read(flows_file)
+    all_ids = {n["id"] for n in raw if "id" in n}
+
+    # Build the set of link-in ids that are referenced by at least one link-out.
+    link_in_ids_with_source: set[str] = set()
+    for n in raw:
+        if n.get("type") == "link out":
+            for peer in n.get("links") or []:
+                link_in_ids_with_source.add(peer)
+
+    candidates = [
+        n for n in raw
+        if n.get("type") in types_set
+        and (tab_id is None or n.get("z") == tab_id)
+    ]
+
+    dangling: list[dict[str, Any]] = []
+    for n in candidates:
+        nid = n.get("id", "")
+        ntype = n.get("type", "")
+        name = n.get("name", "")
+        tab = n.get("z")
+        links = n.get("links")
+
+        reason: str | None = None
+        broken_peers: list[str] = []
+
+        if ntype == "link out":
+            if not isinstance(links, list):
+                reason = "no_links_field"
+            elif len(links) == 0:
+                reason = "link_out_empty_links"
+            else:
+                broken = [p for p in links if p not in all_ids]
+                if len(broken) == len(links):
+                    reason = "all_peers_missing"
+                    broken_peers = broken
+
+        elif ntype == "link in":
+            if isinstance(links, list) and links:
+                broken = [p for p in links if p not in all_ids]
+                if broken and len(broken) == len(links):
+                    reason = "all_peers_missing"
+                    broken_peers = broken
+            if reason is None and nid not in link_in_ids_with_source:
+                reason = "link_in_no_source"
+
+        if reason is not None:
+            dangling.append({
+                "node_id": nid,
+                "type": ntype,
+                "name": name,
+                "tab": tab,
+                "reason": reason,
+                "broken_peers": broken_peers,
+            })
+
+    return {
+        "tab_id": tab_id,
+        "total_checked": len(candidates),
+        "dangling_count": len(dangling),
+        "dangling": dangling,
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Write                                                                        #
 # --------------------------------------------------------------------------- #
