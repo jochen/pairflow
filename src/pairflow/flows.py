@@ -441,14 +441,14 @@ def list_dangling(
 
 
 def search_flows(
-    flows_file: "Path",
+    flows_file: Path,
     query: str,
-    fields: "list[str] | None" = None,
+    fields: list[str] | None = None,
     regex: bool = False,
     case_sensitive: bool = False,
     max_matches: int = 100,
     max_snippet_chars: int = 120,
-) -> "dict[str, Any]":
+) -> dict[str, Any]:
     """Global string search over the flows.json document.
 
     Walks every node in the document and recursively visits all string values,
