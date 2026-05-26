@@ -167,3 +167,121 @@ def test_get_node_rejects_unknown_code_mode(tiny_flows: Path):
 
 def test_get_node_missing(tiny_flows: Path):
     assert flows.get_node(tiny_flows, "does-not-exist") is None
+
+
+# --------------------------------------------------------------------------- #
+# include_sources tests                                                         #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def sources_flows(tmp_path: Path) -> Path:
+    """A minimal flow with a couple of connected nodes for source-lookup tests."""
+    data = [
+        {"id": "tab1", "type": "tab", "label": "T"},
+        # A → port 0 → B, A → port 1 → C
+        {"id": "nodeA", "type": "inject", "name": "Trigger", "z": "tab1",
+         "wires": [["nodeB"], ["nodeC"]]},
+        {"id": "nodeB", "type": "function", "name": "Process", "z": "tab1",
+         "func": "return msg;", "wires": []},
+        {"id": "nodeC", "type": "debug", "name": "Out", "z": "tab1", "wires": []},
+        # link-out → link-in pair
+        {"id": "lout1", "type": "link out", "name": "Sender", "z": "tab1",
+         "links": ["lin1"]},
+        {"id": "lin1", "type": "link in", "name": "Receiver", "z": "tab1",
+         "links": ["lout1"]},
+        # orphan node with no incoming wires
+        {"id": "orphan", "type": "debug", "name": "Alone", "z": "tab1", "wires": []},
+    ]
+    p = tmp_path / "flows.json"
+    p.write_text(json.dumps(data))
+    return p
+
+
+def test_get_node_include_sources_basic(sources_flows: Path):
+    """nodeB has nodeA on port 0 as its only upstream."""
+    n = flows.get_node(sources_flows, "nodeB", include_sources=True)
+    assert n is not None
+    sources = n["sources"]
+    assert len(sources) == 1
+    s = sources[0]
+    assert s["source_id"] == "nodeA"
+    assert s["source_type"] == "inject"
+    assert s["source_name"] == "Trigger"
+    assert s["source_tab"] == "tab1"
+    assert s["port_index"] == 0
+
+
+def test_get_node_include_sources_multiple_ports(sources_flows: Path):
+    """A node with two sources from different ports produces two entries."""
+    # Add a second source that also wires to nodeB from a different node
+    import json
+    data = json.loads(sources_flows.read_text())
+    data.append({
+        "id": "nodeD", "type": "function", "name": "Alt", "z": "tab1",
+        "func": "return msg;", "wires": [["nodeB"]],
+    })
+    sources_flows.write_text(json.dumps(data))
+
+    n = flows.get_node(sources_flows, "nodeB", include_sources=True)
+    assert n is not None
+    sources = n["sources"]
+    assert len(sources) == 2
+    ids = {s["source_id"] for s in sources}
+    assert ids == {"nodeA", "nodeD"}
+
+
+def test_get_node_include_sources_same_source_two_ports(tmp_path: Path):
+    """A single source with two output ports both wired to target → two entries."""
+    data = [
+        {"id": "tab1", "type": "tab", "label": "T"},
+        {"id": "src", "type": "function", "name": "Multi", "z": "tab1",
+         "func": "return [msg, msg];", "wires": [["tgt"], ["tgt"]]},
+        {"id": "tgt", "type": "debug", "name": "Sink", "z": "tab1", "wires": []},
+    ]
+    p = tmp_path / "flows.json"
+    p.write_text(json.dumps(data))
+
+    n = flows.get_node(p, "tgt", include_sources=True)
+    assert n is not None
+    sources = n["sources"]
+    assert len(sources) == 2
+    assert all(s["source_id"] == "src" for s in sources)
+    port_indices = {s["port_index"] for s in sources}
+    assert port_indices == {0, 1}
+
+
+def test_get_node_include_sources_link_out(sources_flows: Path):
+    """link-out with target in its .links appears as a source for the link-in."""
+    n = flows.get_node(sources_flows, "lin1", include_sources=True)
+    assert n is not None
+    sources = n["sources"]
+    assert len(sources) == 1
+    s = sources[0]
+    assert s["source_id"] == "lout1"
+    assert s["source_type"] == "link out"
+    assert s["port_index"] == 0
+
+
+def test_get_node_include_sources_link_in_not_treated_as_source(sources_flows: Path):
+    """link-in.links is UI metadata — link-in must NOT appear as a source."""
+    # lin1 has lout1 in its .links (mirroring) — but lin1 is not a source for lout1
+    n = flows.get_node(sources_flows, "lout1", include_sources=True)
+    assert n is not None
+    # lout1's sources should be empty (nothing wires INTO a link-out via wires)
+    source_ids = {s["source_id"] for s in n["sources"]}
+    assert "lin1" not in source_ids
+
+
+def test_get_node_include_sources_default_off(sources_flows: Path):
+    """Without include_sources, the result has no 'sources' key."""
+    n = flows.get_node(sources_flows, "nodeB")
+    assert n is not None
+    assert "sources" not in n
+
+
+def test_get_node_include_sources_no_upstreams(sources_flows: Path):
+    """An orphan node with no incoming wires returns an empty sources list."""
+    n = flows.get_node(sources_flows, "orphan", include_sources=True)
+    assert n is not None
+    assert n["sources"] == []

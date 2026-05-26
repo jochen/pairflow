@@ -96,7 +96,11 @@ def build_server(config: Config) -> FastMCP:
         )
 
     @tool
-    def nr_get_node(node_id: str, code: str = "signatures") -> dict[str, Any] | None:
+    def nr_get_node(
+        node_id: str,
+        code: str = "signatures",
+        include_sources: bool = False,
+    ) -> dict[str, Any] | None:
         """Return a node by id, or null if not found.
 
         For function nodes, `code` controls how the JS body is rendered:
@@ -104,8 +108,13 @@ def build_server(config: Config) -> FastMCP:
             (line/char count, first lines, declared helpers, node.on events).
           * `"full"` — full body, useful when you need to edit it.
           * `"omit"` — drop the body entirely.
+
+        `include_sources=True` adds a `sources` list to the result — one
+        entry per upstream connection into this node (the reverse of `wires`).
+        Each entry: `{source_id, source_type, source_name, source_tab,
+        port_index}`. Default off; only pay for the full-flow walk when needed.
         """
-        return flows.get_node(flows_file, node_id, code=code)
+        return flows.get_node(flows_file, node_id, code=code, include_sources=include_sources)
 
     # ---- write ---------------------------------------------------------- #
 

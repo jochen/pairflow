@@ -172,6 +172,7 @@ def get_node(
     flows_file: Path,
     node_id: str,
     code: str = "signatures",
+    include_sources: bool = False,
 ) -> dict[str, Any] | None:
     """Return the full node JSON, or None if no node with that id exists.
 
@@ -185,20 +186,93 @@ def get_node(
       * ``"omit"`` — drop the `func` field entirely.
 
     Non-function nodes are unaffected by `code`.
+
+    When `include_sources=True`, a ``sources`` key is added to the result with
+    one entry per upstream connection::
+
+        [{"source_id": str, "source_type": str, "source_name": str,
+          "source_tab": str | None, "port_index": int}, ...]
+
+    This is the reverse of ``wires`` — it answers "which nodes feed this node?"
+    Default off to keep the common case cheap.
     """
     if code not in _GET_NODE_CODE_MODES:
         raise ValueError(
             f"Unknown code mode {code!r}; expected one of {_GET_NODE_CODE_MODES}"
         )
-    for n in _read(flows_file):
+    data = _read(flows_file)
+    for n in data:
         if n.get("id") == node_id:
             if n.get("type") == "function" and isinstance(n.get("func"), str) and code != "full":
                 n = dict(n)
                 func = n.pop("func")
                 if code == "signatures":
                     n["func_summary"] = _summarize_function_body(func)
+            if include_sources:
+                n = dict(n)
+                n["sources"] = _find_sources(data, node_id)
             return n
     return None
+
+
+def _find_sources(
+    data: list[dict[str, Any]],
+    node_id: str,
+) -> list[dict[str, Any]]:
+    """Return all nodes that have an outgoing connection to `node_id`.
+
+    Each entry describes one connection::
+
+        {"source_id": str, "source_type": str, "source_name": str,
+         "source_tab": str | None, "port_index": int}
+
+    Rules:
+    - Regular nodes: each output-port group in ``wires`` that contains
+      ``node_id`` produces one entry; ``port_index`` is the group index.
+    - ``link out`` nodes: if ``node_id`` is in the node's ``links`` array,
+      one entry with ``port_index=0`` is produced.
+    - ``link in`` nodes: their ``links`` array is UI metadata (mirrors the
+      link-out side) and does NOT make them a source — skip them.
+    - The target node itself is never included.
+    """
+    sources: list[dict[str, Any]] = []
+    for n in data:
+        nid = n.get("id")
+        if nid == node_id:
+            continue
+        ntype = n.get("type", "")
+
+        if ntype == "link in":
+            # link-in.links is UI metadata only — not a routing source
+            continue
+
+        if ntype == "link out":
+            links = n.get("links")
+            if isinstance(links, list) and node_id in links:
+                sources.append({
+                    "source_id": nid,
+                    "source_type": ntype,
+                    "source_name": n.get("name", ""),
+                    "source_tab": n.get("z") or None,
+                    "port_index": 0,
+                })
+            continue
+
+        # Regular node: walk each output-port group
+        wires = n.get("wires")
+        if not isinstance(wires, list):
+            continue
+        for port_idx, grp in enumerate(wires):
+            if isinstance(grp, list) and node_id in grp:
+                sources.append({
+                    "source_id": nid,
+                    "source_type": ntype,
+                    "source_name": n.get("name", ""),
+                    "source_tab": n.get("z") or None,
+                    "port_index": port_idx,
+                })
+
+    return sources
 
 
 def _summarize_function_body(code: str) -> dict[str, Any]:
