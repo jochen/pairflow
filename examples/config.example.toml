@@ -18,6 +18,16 @@ service     = "nodered"
 # Enables (later) git diff / status / commit tools.
 # project_dir = "/home/pi/.node-red/projects/my-project"
 
+# Optional: arm the editor's "flows changed in the background" warning early.
+# When true (default), the first flow-mutating write since the last nr_deploy
+# fires one Admin-API `reload`. Node-RED re-reads flows.json, its revision
+# advances past what any open editor holds, and both the warning and the 409
+# version-mismatch guard arm immediately — so an open editor can't silently
+# overwrite in-progress disk edits if the session ends before nr_deploy.
+# Note: the reload makes the current (possibly partial) on-disk flow live.
+# Set false to keep the old behaviour (warning only after nr_deploy / restart).
+# eager_reload = true
+
 
 # MQTT brokers. The broker named "default" is used when an MQTT tool
 # is called without an explicit broker= argument. Add as many additional

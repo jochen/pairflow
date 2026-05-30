@@ -36,6 +36,7 @@ from . import (
     service,
     tracing,
     validate,
+    writer,
 )
 from .config import Config
 from .usage_log import UsageLogger
@@ -52,6 +53,46 @@ def build_server(config: Config) -> FastMCP:
 
     def tool(fn):
         return mcp.tool(usage.wrap(fn))
+
+    # ---- early editor-warning arming ------------------------------------ #
+
+    # Pairflow patches flows.json on disk; the running NR instance is blind to
+    # that until nr_deploy restarts it. In that gap a human deploy from an open
+    # editor would overwrite our disk edits. To close it, the first mutating
+    # write since the last deploy fires one Admin-API `reload`: NR re-reads the
+    # file, its revision advances past the editor's, and both the "flows
+    # changed" warning and the 409 version-mismatch guard arm immediately —
+    # long before this session could end. One reload per batch is enough;
+    # further edits keep disk ahead of the (now stale) editor revision.
+    # `_armed` is reset by nr_deploy. Best-effort: a reload failure never fails
+    # the write that already succeeded on disk.
+    armed = {"value": False}
+
+    def _mtime() -> float | None:
+        try:
+            return writer.current_mtime(flows_file)
+        except OSError:
+            return None
+
+    def _arm(result: Any, before_mtime: float | None) -> Any:
+        if not config.node_red.eager_reload or armed["value"]:
+            return result
+        after = _mtime()
+        # Nothing was written (e.g. an idempotent no-op): leave disarmed so the
+        # next real change still triggers the reload.
+        if after is None or (before_mtime is not None and abs(after - before_mtime) <= 1e-6):
+            return result
+        try:
+            rev = nr_admin.reload(config.node_red.admin_url)
+            armed["value"] = True
+            if isinstance(result, dict):
+                result.setdefault("editor_warning_armed", True)
+                result.setdefault("reload_rev", rev.get("rev"))
+        except Exception as exc:  # noqa: BLE001 — arming is best-effort
+            if isinstance(result, dict):
+                result["editor_warning_armed"] = False
+                result["editor_warning_error"] = str(exc)
+        return result
 
     # ============================================================ #
     # Tier 1 — flow surgery                                          #
@@ -264,14 +305,18 @@ def build_server(config: Config) -> FastMCP:
         node_id: str | None = None,
     ) -> dict[str, Any]:
         """Add a new node to a tab. For function nodes, validates JS first."""
-        return flows.add_node(
-            flows_file,
-            tab_id=tab_id,
-            node_type=node_type,
-            props=props,
-            x=x,
-            y=y,
-            node_id=node_id,
+        before = _mtime()
+        return _arm(
+            flows.add_node(
+                flows_file,
+                tab_id=tab_id,
+                node_type=node_type,
+                props=props,
+                x=x,
+                y=y,
+                node_id=node_id,
+            ),
+            before,
         )
 
     @tool
@@ -291,7 +336,8 @@ def build_server(config: Config) -> FastMCP:
         response includes a ``hint`` key reminding you to call ``nr_deploy``
         for the change to take effect.
         """
-        return flows.update_node(flows_file, node_id, patch, verbose=verbose)
+        before = _mtime()
+        return _arm(flows.update_node(flows_file, node_id, patch, verbose=verbose), before)
 
     @tool
     def nr_delete_node(node_id: str, missing_ok: bool = False) -> dict[str, Any]:
@@ -301,7 +347,8 @@ def build_server(config: Config) -> FastMCP:
         `{deleted: null, references_removed: 0, found: false}` instead of
         raising — useful for cleanup loops over stale id lists.
         """
-        return flows.delete_node(flows_file, node_id, missing_ok=missing_ok)
+        before = _mtime()
+        return _arm(flows.delete_node(flows_file, node_id, missing_ok=missing_ok), before)
 
     @tool
     def nr_wire(src_id: str, src_port: int, dst_id: str) -> dict[str, Any]:
@@ -317,7 +364,8 @@ def build_server(config: Config) -> FastMCP:
 
         Returns `{src, dst, added, kind}` where `kind` is `"link"` or `"wire"`.
         """
-        return flows.wire(flows_file, src_id=src_id, src_port=src_port, dst_id=dst_id)
+        before = _mtime()
+        return _arm(flows.wire(flows_file, src_id=src_id, src_port=src_port, dst_id=dst_id), before)
 
     @tool
     def nr_unwire(src_id: str, src_port: int, dst_id: str) -> dict[str, Any]:
@@ -326,7 +374,8 @@ def build_server(config: Config) -> FastMCP:
         Link pairs are removed from both nodes' `.links`; wire pairs from
         `src.wires[src_port]`. `src_port` is ignored for link pairs.
         """
-        return flows.unwire(flows_file, src_id=src_id, src_port=src_port, dst_id=dst_id)
+        before = _mtime()
+        return _arm(flows.unwire(flows_file, src_id=src_id, src_port=src_port, dst_id=dst_id), before)
 
     @tool
     def nr_validate_function(code: str) -> dict[str, Any]:
@@ -379,11 +428,14 @@ def build_server(config: Config) -> FastMCP:
         sudoers entry for `systemctl restart <service>`; see the error message
         for the exact line if the call fails on permissions.
         """
-        return service.restart(
+        result = service.restart(
             config.node_red.service,
             admin_url=config.node_red.admin_url,
             wait_timeout=wait_timeout,
         )
+        # Runtime and disk are back in sync; the next write re-arms the warning.
+        armed["value"] = False
+        return result
 
     @tool
     def nr_inject(node_id: str) -> dict[str, Any]:

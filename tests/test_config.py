@@ -46,7 +46,22 @@ def test_load_config_minimal(tmp_path: Path):
     cfg = load_config(cfg_file)
     assert cfg.node_red.flows_file == Path("/tmp/flows.json")
     assert cfg.node_red.admin_url == "http://localhost:1880"  # default
+    assert cfg.node_red.eager_reload is True  # default
     assert cfg.broker("default").host == "localhost"
+
+
+def test_load_config_eager_reload_can_be_disabled(tmp_path: Path):
+    cfg_file = tmp_path / "c.toml"
+    _write_config(
+        cfg_file,
+        """
+        [node_red]
+        flows_file = "/tmp/flows.json"
+        eager_reload = false
+        """,
+    )
+    cfg = load_config(cfg_file)
+    assert cfg.node_red.eager_reload is False
 
 
 def test_load_config_missing_file(tmp_path: Path):

@@ -49,6 +49,54 @@ def inject(admin_url: str, node_id: str, timeout: float = 10.0) -> dict[str, Any
     return {"node_id": node_id, "status_code": r.status_code, "triggered": True}
 
 
+# --- reload ---------------------------------------------------------------- #
+
+
+def reload(admin_url: str, timeout: float = 30.0) -> dict[str, Any]:
+    """Tell Node-RED to re-read ``flows.json`` from disk and redeploy.
+
+    Issues ``POST /flows`` with the ``Node-RED-Deployment-Type: reload``
+    header. The runtime re-loads flows from storage, recomputes the flow
+    revision (a sha256 of the flows content), and broadcasts a
+    ``runtime-deploy`` notification over ``/comms``.
+
+    Two things follow from that, and they are the whole point of calling this
+    after a disk write:
+
+      * Any open editor whose loaded revision differs from the new one shows
+        the "flows were modified in the background" warning, prompting the
+        human to reload before deploying.
+      * The runtime's cached revision advances, so a subsequent editor deploy
+        carrying the *old* revision is rejected with ``409`` (version
+        mismatch) instead of silently overwriting the on-disk changes.
+
+    Returns ``{status_code, rev}`` where ``rev`` is the new revision reported
+    by Node-RED (``None`` if the response carried no body).
+    """
+    url = admin_url.rstrip("/") + "/flows"
+    headers = {
+        "Node-RED-Deployment-Type": "reload",
+        "Content-Type": "application/json",
+    }
+    try:
+        r = httpx.post(url, headers=headers, json={}, timeout=timeout)
+    except httpx.RequestError as exc:
+        raise RuntimeError(f"Cannot reach Node-RED Admin API at {admin_url}: {exc}") from exc
+
+    if r.status_code >= 400:
+        raise RuntimeError(
+            f"Admin API returned {r.status_code} for reload {url}: {r.text[:200]}"
+        )
+
+    rev: str | None = None
+    try:
+        rev = r.json().get("rev")
+    except (ValueError, AttributeError):
+        pass
+
+    return {"status_code": r.status_code, "rev": rev}
+
+
 # --- debug stream ---------------------------------------------------------- #
 
 
