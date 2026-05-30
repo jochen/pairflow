@@ -43,6 +43,41 @@ def test_inject_connection_failure_is_runtime_error():
             nr_admin.inject("http://localhost:1880", "nodeX")
 
 
+# --- reload ----------------------------------------------------------------- #
+
+
+def test_reload_success_returns_rev():
+    fake_resp = MagicMock(status_code=200)
+    fake_resp.json.return_value = {"rev": "abc123"}
+    with patch("pairflow.nr_admin.httpx.post", return_value=fake_resp) as m:
+        r = nr_admin.reload("http://localhost:1880")
+    assert r == {"status_code": 200, "rev": "abc123"}
+    assert m.call_args.args[0] == "http://localhost:1880/flows"
+    assert m.call_args.kwargs["headers"]["Node-RED-Deployment-Type"] == "reload"
+
+
+def test_reload_tolerates_bodyless_response():
+    fake_resp = MagicMock(status_code=204)
+    fake_resp.json.side_effect = ValueError("no body")
+    with patch("pairflow.nr_admin.httpx.post", return_value=fake_resp):
+        r = nr_admin.reload("http://localhost:1880")
+    assert r == {"status_code": 204, "rev": None}
+
+
+def test_reload_5xx_is_runtime_error():
+    fake_resp = MagicMock(status_code=500, text="boom")
+    with patch("pairflow.nr_admin.httpx.post", return_value=fake_resp):
+        with pytest.raises(RuntimeError, match="500"):
+            nr_admin.reload("http://localhost:1880")
+
+
+def test_reload_connection_failure_is_runtime_error():
+    with patch("pairflow.nr_admin.httpx.post",
+               side_effect=httpx.ConnectError("nope")):
+        with pytest.raises(RuntimeError, match="Cannot reach"):
+            nr_admin.reload("http://localhost:1880")
+
+
 # --- ws url derivation ------------------------------------------------------ #
 
 

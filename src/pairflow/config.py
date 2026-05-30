@@ -21,6 +21,14 @@ class NodeRedConfig:
     admin_url: str = "http://localhost:1880"
     service: str = "nodered"
     project_dir: Path | None = None
+    # After the first flow-mutating write since the last deploy, fire one
+    # Admin-API `reload` so the runtime revision advances past what any open
+    # editor holds. That arms the editor's "flows changed in the background"
+    # warning and the 409 version-mismatch guard early — protecting in-progress
+    # disk edits from being overwritten by a human deploy if this session ends
+    # before nr_deploy. See nr_admin.reload. Set false to keep the old
+    # behaviour (warning only appears after nr_deploy / restart).
+    eager_reload: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +112,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
             if nr_raw.get("project_dir")
             else None
         ),
+        eager_reload=bool(nr_raw.get("eager_reload", True)),
     )
 
     brokers: dict[str, BrokerConfig] = {}

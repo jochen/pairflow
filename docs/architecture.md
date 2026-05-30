@@ -97,7 +97,7 @@ Atomic, structured operations on the flows file. All write operations include ba
 
 The primitives that close the "did it work?" loop.
 
-- `nr_deploy(wait_timeout=)` — systemctl restart + Admin-API readiness poll
+- `nr_deploy(wait_timeout=)` — systemctl restart + Admin-API readiness poll. Resets the eager-reload arming (see Concurrency, below)
 - `nr_inject(node_id)` — trigger an inject node via Admin API
 - `nr_tail_debug(seconds, filter_substr=, max_msg_chars=)` — open a WebSocket to the NR debug stream, collect entries for the given window, return as structured data
 - `nr_journal(lines=, filter_regex=, max_bytes=)` — read recent systemd journal entries; oldest lines dropped if output exceeds `max_bytes`
@@ -159,6 +159,6 @@ All MQTT tools accept an optional `broker=` argument; if omitted, the `default` 
 
 These will be resolved as implementation progresses; recording them here so they aren't forgotten.
 
-- **Concurrency with the editor.** If the human is actively editing in the Node-RED UI when Pairflow writes the file, the next UI-side deploy will overwrite Pairflow's change. Mitigation options: detect via mtime and refuse to write; or write through Admin API as a fallback when the editor is connected; or simply document the constraint and rely on the human not to interleave.
+- **Concurrency with the editor.** If the human is actively editing in the Node-RED UI when Pairflow writes the file, a UI-side deploy can overwrite Pairflow's change. The writer already guards its own read→write window via optimistic mtime locking (`ConcurrentModificationError`). The remaining hole was the gap *between* a disk write and `nr_deploy`: the running NR instance is blind to the file, so its cached flow revision still matches the editor's, and a human deploy in that window overwrites silently. Mitigated by **eager reload** (`node_red.eager_reload`, default on): the first mutating write since the last deploy fires one Admin-API `reload`, advancing the runtime revision past the editor's. That arms both Node-RED's "flows changed in the background" warning and its 409 version-mismatch guard immediately, instead of only after the final restart. Trade-off: the reload makes the current (possibly partial) on-disk flow live before `nr_deploy`. Set `eager_reload = false` to opt out.
 - **Credentials.** `flows_cred.json` lives next to `flows.json` and is encrypted. Pairflow should never need to read it, but should be aware of it when copying or backing up. To verify and document.
 - **Multi-instance support.** Whether one Pairflow process should be able to point at multiple Node-RED instances, or whether multiple Pairflow processes should run in parallel. Probably the latter — simpler, fewer footguns.
