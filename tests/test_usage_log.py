@@ -11,10 +11,12 @@ import pytest
 
 from pairflow.config import TelemetryConfig, load_config
 from pairflow.usage_log import (
+    SENSITIVE_ARG_NAMES,
     UsageLogger,
     _find_truncations,
     _response_bytes,
     _response_shape,
+    _scrub_args,
     _scrub_value,
 )
 
@@ -330,8 +332,9 @@ def test_build_server_tools_retain_parameter_schema(tmp_path: Path):
     tools = asyncio.run(server.list_tools())
     by_name = {t.name: t for t in tools}
 
-    # All 26 tools registered (24 original + nr_list_dangling + nr_search_flows).
-    assert len(tools) == 26
+    # All 29 tools registered (24 original + nr_list_dangling + nr_search_flows
+    # + nr_set_credentials + nr_list_credentials + nr_delete_credentials).
+    assert len(tools) == 29
 
     # A canonical sync tool: nr_list_tabs(include_info: bool = False)
     p = by_name["nr_list_tabs"].parameters
@@ -355,3 +358,63 @@ def test_logger_write_failure_does_not_break_call(tmp_path: Path, monkeypatch):
 
     wrapped = logger.wrap(f)
     assert wrapped(7) == 14  # must not raise
+
+
+# --- sensitive-arg redaction ----------------------------------------------- #
+
+
+def test_sensitive_arg_names_contains_credentials():
+    assert "credentials" in SENSITIVE_ARG_NAMES
+
+
+def test_scrub_args_redacts_credentials_dict():
+    """A 'credentials' argument must be replaced with key names only, no values."""
+    args = {
+        "node_id": "abc123",
+        "credentials": {"username": "admin", "password": "s3cr3t"},
+        "merge": True,
+    }
+    out = _scrub_args(args, max_chars=200, max_dict_chars=800)
+
+    # Non-sensitive args pass through normally.
+    assert out["node_id"] == "abc123"
+    assert out["merge"] is True
+
+    # The credentials value must be redacted — no secret values present.
+    redacted = out["credentials"]
+    assert redacted["_redacted"] is True
+    assert sorted(redacted["_keys"]) == ["password", "username"]
+    assert "s3cr3t" not in str(redacted)
+    assert "admin" not in str(redacted)
+
+
+def test_scrub_args_redacts_credentials_non_dict():
+    """A non-dict 'credentials' arg is still redacted (no _keys)."""
+    args = {"credentials": "raw-token-string"}
+    out = _scrub_args(args, max_chars=200, max_dict_chars=800)
+    assert out["credentials"] == {"_redacted": True}
+    assert "raw-token-string" not in str(out)
+
+
+def test_wrap_credentials_arg_never_logged(tmp_path: Path):
+    """End-to-end: a tool call with a credentials arg must not log any values."""
+    log_path = tmp_path / "u.jsonl"
+    logger = UsageLogger(enabled=True, path=log_path)
+
+    def nr_set_credentials(node_id: str, credentials: dict, merge: bool = True) -> dict:
+        return {"ok": True}
+
+    wrapped = logger.wrap(nr_set_credentials)
+    wrapped("node1", {"password": "hunter2", "username": "neo"})
+
+    rec = json.loads(log_path.read_text().splitlines()[0])
+    logged_text = json.dumps(rec)
+
+    # Values must never appear in the log.
+    assert "hunter2" not in logged_text
+    assert "neo" not in logged_text
+
+    # But key names and other args should be present.
+    assert rec["args"]["credentials"]["_redacted"] is True
+    assert "password" in rec["args"]["credentials"]["_keys"]
+    assert rec["args"]["node_id"] == "node1"

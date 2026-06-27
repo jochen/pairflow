@@ -49,6 +49,12 @@ _log = logging.getLogger(__name__)
 DEFAULT_MAX_ARG_CHARS = 200
 DEFAULT_MAX_ARG_DICT_CHARS = 800
 
+# Argument names whose values must NEVER appear verbatim in the log.
+# When a tool call carries one of these args, the value is replaced with a
+# {_redacted, _keys} summary (dict) or {_redacted} (non-dict) so the log
+# never leaks credential payloads.
+SENSITIVE_ARG_NAMES: frozenset[str] = frozenset({"credentials"})
+
 
 def _default_log_path() -> Path:
     xdg = os.environ.get("XDG_STATE_HOME")
@@ -84,7 +90,17 @@ def _scrub_value(v: Any, max_chars: int, max_dict_chars: int) -> Any:
 
 def _scrub_args(args: dict[str, Any], max_chars: int,
                 max_dict_chars: int) -> dict[str, Any]:
-    return {k: _scrub_value(v, max_chars, max_dict_chars) for k, v in args.items()}
+    result: dict[str, Any] = {}
+    for k, v in args.items():
+        if k in SENSITIVE_ARG_NAMES:
+            # Never log credential values — replace with a key-only summary.
+            if isinstance(v, dict):
+                result[k] = {"_redacted": True, "_keys": sorted(v.keys())}
+            else:
+                result[k] = {"_redacted": True}
+        else:
+            result[k] = _scrub_value(v, max_chars, max_dict_chars)
+    return result
 
 
 def _find_truncations(obj: Any) -> dict[str, int]:

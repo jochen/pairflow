@@ -99,6 +99,53 @@ def test_load_config_multiple_brokers(tmp_path: Path):
     assert cfg.broker("remote").password_env == "PW_VAR"
 
 
+def test_effective_user_dir_defaults_to_dotnodered(tmp_path: Path):
+    cfg_file = tmp_path / "c.toml"
+    _write_config(
+        cfg_file,
+        """
+        [node_red]
+        flows_file = "/tmp/flows.json"
+        """,
+    )
+    cfg = load_config(cfg_file)
+    assert cfg.node_red.user_dir is None
+    assert cfg.node_red.effective_user_dir == Path.home() / ".node-red"
+
+
+def test_effective_credentials_file_lives_in_user_dir_not_flows_dir(tmp_path: Path):
+    """Regression: Node-RED stores the cred file in userDir using the flows
+    file's *basename*, NOT next to the flows file. This matters when flows_file
+    points into a project subdir — the cred file is still in user_dir.
+    """
+    cfg_file = tmp_path / "c.toml"
+    _write_config(
+        cfg_file,
+        f"""
+        [node_red]
+        flows_file = "{tmp_path}/projects/foo/flows_foo.json"
+        user_dir = "{tmp_path}/userdir"
+        """,
+    )
+    cfg = load_config(cfg_file)
+    # Derived in user_dir, with the flows basename — not in projects/foo/.
+    assert cfg.node_red.effective_credentials_file == tmp_path / "userdir" / "flows_foo_cred.json"
+
+
+def test_explicit_credentials_file_wins(tmp_path: Path):
+    cfg_file = tmp_path / "c.toml"
+    _write_config(
+        cfg_file,
+        """
+        [node_red]
+        flows_file = "/tmp/flows.json"
+        credentials_file = "/somewhere/else/creds.json"
+        """,
+    )
+    cfg = load_config(cfg_file)
+    assert cfg.node_red.effective_credentials_file == Path("/somewhere/else/creds.json")
+
+
 def test_broker_password_from_env(monkeypatch, tmp_path: Path):
     cfg_file = tmp_path / "c.toml"
     _write_config(

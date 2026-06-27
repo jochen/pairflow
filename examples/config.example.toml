@@ -18,6 +18,19 @@ service     = "nodered"
 # Enables (later) git diff / status / commit tools.
 # project_dir = "/home/pi/.node-red/projects/my-project"
 
+# Optional: Node-RED user directory (where settings.js and .config*.json live).
+# Defaults to ~/.node-red. Used by the nr_*_credentials tools to read the
+# credentialSecret transiently (it is never copied into pairflow config).
+# user_dir = "/home/pi/.node-red"
+
+# Optional: explicit path to the encrypted credential-store file. When unset,
+# pairflow derives it the way Node-RED does: user_dir + the flows file's
+# basename with a "_cred" suffix — e.g. flows_file
+# ".../projects/foo/flows_foo.json" → "<user_dir>/flows_foo_cred.json"
+# (NOT next to the flows file). Set this explicitly only if Node-RED projects
+# mode is active, where the cred file lives inside the active project dir.
+# credentials_file = "/home/pi/.node-red/flows_cred.json"
+
 # Optional: arm the editor's "flows changed in the background" warning early.
 # When true (default), the first flow-mutating write since the last nr_deploy
 # fires one Admin-API `reload`. Node-RED re-reads flows.json, its revision

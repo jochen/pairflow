@@ -29,6 +29,39 @@ class NodeRedConfig:
     # before nr_deploy. See nr_admin.reload. Set false to keep the old
     # behaviour (warning only appears after nr_deploy / restart).
     eager_reload: bool = True
+    # Node-RED user directory (where settings.js and .config*.json live).
+    # When None, callers default to ~/.node-red.
+    user_dir: Path | None = None
+    # Explicit path to the credential store file.  When None, it is derived
+    # the way Node-RED itself derives it (see effective_credentials_file).
+    # Set this explicitly when Node-RED projects mode is active — then the
+    # cred file lives inside the active project directory, not the user dir.
+    credentials_file: Path | None = None
+
+    @property
+    def effective_user_dir(self) -> Path:
+        """Node-RED user directory, defaulting to ~/.node-red."""
+        return self.user_dir or Path.home() / ".node-red"
+
+    @property
+    def effective_credentials_file(self) -> Path:
+        """Credential-store path, derived the way Node-RED derives it.
+
+        Node-RED (``storage/localfilesystem/projects/index.js``) computes the
+        cred file as ``userDir / (basename(flowFile, ext) + "_cred" + ext)`` —
+        i.e. in the **user directory**, using only the flows file's *basename*,
+        NOT in the flows file's own directory.  This matters when ``flows_file``
+        points into a project folder (e.g.
+        ``~/.node-red/projects/foo/flows_foo.json``): the cred file is still
+        ``~/.node-red/flows_foo_cred.json``.
+
+        With Node-RED *projects mode* active the cred file lives inside the
+        project dir instead; set ``credentials_file`` explicitly for that case.
+        """
+        if self.credentials_file is not None:
+            return self.credentials_file
+        ff = self.flows_file
+        return self.effective_user_dir / (ff.stem + "_cred" + ff.suffix)
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +146,16 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
             else None
         ),
         eager_reload=bool(nr_raw.get("eager_reload", True)),
+        user_dir=(
+            Path(nr_raw["user_dir"]).expanduser()
+            if nr_raw.get("user_dir")
+            else None
+        ),
+        credentials_file=(
+            Path(nr_raw["credentials_file"]).expanduser()
+            if nr_raw.get("credentials_file")
+            else None
+        ),
     )
 
     brokers: dict[str, BrokerConfig] = {}

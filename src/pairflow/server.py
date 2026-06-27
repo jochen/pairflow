@@ -5,6 +5,7 @@ Tier 1 (flow surgery — synchronous; touches the flows file on disk):
   Writes: nr_add_node, nr_update_node, nr_delete_node, nr_wire, nr_unwire,
           nr_validate_function
   Run:    nr_run_function (sandboxed; node subprocess, no deploy)
+  Creds:  nr_set_credentials, nr_list_credentials, nr_delete_credentials
 
 Tier 2 (verification — most are async; talks to NR, MQTT, systemd):
   Deploy:   nr_deploy
@@ -26,6 +27,9 @@ from typing import Any
 
 from fastmcp import FastMCP
 
+from . import (
+    credentials as _credentials,
+)
 from . import (
     flows,
     function_runner,
@@ -292,6 +296,136 @@ def build_server(config: Config) -> FastMCP:
             max_matches=max_matches,
             max_snippet_chars=max_snippet_chars,
         )
+
+    # ---- credentials ---------------------------------------------------- #
+
+    # Credential writes bypass the eager-reload helper intentionally:
+    # they touch the *credential store* file, not flows.json, so NR's revision
+    # counter is not involved.  A deploy (full restart) is always required for
+    # the runtime to pick up the new credential.
+
+    @tool
+    def nr_set_credentials(
+        node_id: str,
+        credentials: dict[str, Any],
+        merge: bool = True,
+    ) -> dict[str, Any]:
+        """Write or merge credentials for a node into the encrypted credential store.
+
+        This is the ONLY reliable way to set Node-RED credentials from outside
+        the editor.  Two approaches that do NOT work have been tested and ruled
+        out: (a) embedding credentials inline in flows.json (Node-RED ignores
+        them on startup), and (b) using the POST /flows Admin-API deploy with
+        inline credentials (the POST returns 200 but the credential never
+        reaches the runtime store).
+
+        What this tool does instead:
+
+          1. Reads the credential secret transiently from settings.js
+             (or .config.runtime.json as a fallback).  The secret is held
+             in a local variable only — never stored in pairflow config,
+             never logged, never returned.
+          2. Reads and decrypts the existing credential store file
+             (``<flows_stem>_cred.json`` or the explicit ``credentials_file``
+             from pairflow config).
+          3. Merges (or replaces) the credentials for ``node_id`` in the
+             store.
+          4. Re-encrypts and atomically writes the store back to disk,
+             using optimistic locking (same mtime-check pattern as
+             ``nr_update_node``).
+
+        **A deploy is required** — use ``nr_deploy`` after this call.
+        Credentials are NOT picked up by the eager reload that other write
+        tools trigger; only a full Node-RED restart reads the cred store.
+
+        Parameters
+        ----------
+        node_id:
+            The Node-RED node id that owns these credentials.
+        credentials:
+            Dict of credential fields, e.g. ``{"username": "admin",
+            "password": "s3cr3t"}``.  Values are encrypted on disk and never
+            appear in tool responses or logs.
+        merge:
+            When ``True`` (default), existing fields for the node are kept and
+            ``credentials`` is merged on top.  Set ``False`` to replace the
+            entire credential entry for the node.
+
+        Returns
+        -------
+        ``{node_id, keys_set, merged, deploy_required, hint}`` —
+        field *names* only; values are never returned.
+        """
+        user_dir = config.node_red.effective_user_dir
+        cred_file = config.node_red.effective_credentials_file
+        secret = _credentials.resolve_secret(user_dir)
+        result = _credentials.set_node_credentials(
+            cred_file, node_id, credentials, secret, merge=merge,
+        )
+        result["deploy_required"] = True
+        result["hint"] = (
+            "Credential written to the store. Run nr_deploy (Node-RED restart) "
+            "for it to take effect; credentials are NOT picked up by the eager reload."
+        )
+        return result
+
+    @tool
+    def nr_list_credentials() -> dict[str, Any]:
+        """List all nodes that have stored credentials, with field names only.
+
+        Reads and decrypts the credential store, then returns one entry per
+        node with the sorted list of field names (e.g. ``["password",
+        "username"]``).  Credential *values* are never included — this tool
+        is safe to call in any context without leaking secrets.
+
+        Returns
+        -------
+        ``{"count": int, "nodes": [{"node_id": str, "keys": [str, ...]}, …]}``
+
+        When the credential file does not yet exist, ``count`` is 0 and
+        ``nodes`` is empty.
+        """
+        user_dir = config.node_red.effective_user_dir
+        cred_file = config.node_red.effective_credentials_file
+        secret = _credentials.resolve_secret(user_dir)
+        return _credentials.list_node_credentials(cred_file, secret)
+
+    @tool
+    def nr_delete_credentials(
+        node_id: str,
+        missing_ok: bool = False,
+    ) -> dict[str, Any]:
+        """Remove credentials for ``node_id`` from the encrypted credential store.
+
+        Like ``nr_set_credentials``, this writes the credential store file
+        directly (not via flows.json).  A deploy is required for the change
+        to take effect in the running Node-RED instance.
+
+        Parameters
+        ----------
+        node_id:
+            The Node-RED node id whose credentials to remove.
+        missing_ok:
+            When ``True``, a non-existent node id returns
+            ``{deleted: null, found: false}`` instead of raising — useful
+            for cleanup loops over stale id lists.
+
+        Returns
+        -------
+        ``{deleted, found, deploy_required, hint}``
+        """
+        user_dir = config.node_red.effective_user_dir
+        cred_file = config.node_red.effective_credentials_file
+        secret = _credentials.resolve_secret(user_dir)
+        result = _credentials.delete_node_credentials(
+            cred_file, node_id, secret, missing_ok=missing_ok,
+        )
+        result["deploy_required"] = True
+        result["hint"] = (
+            "Credential removed from the store. Run nr_deploy (Node-RED restart) "
+            "for it to take effect; credentials are NOT picked up by the eager reload."
+        )
+        return result
 
     # ---- write ---------------------------------------------------------- #
 
