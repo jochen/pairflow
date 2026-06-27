@@ -93,6 +93,14 @@ Atomic, structured operations on the flows file. All write operations include ba
 - `nr_validate_function(code)` → syntax-only JS validation
 - `nr_run_function(node_id, msg, timeout=)` → sandboxed execution of a function body via node subprocess; no deploy needed
 
+Credential store (writes the AES-256-CTR encrypted credential file directly — the only reliable way to set credentials outside the editor; inline credentials in flows.json and the Admin-API `POST /flows` deploy were both empirically proven NOT to persist):
+
+- `nr_set_credentials(node_id, credentials, merge=)` → write/merge a node's credentials; `deploy_required` (full restart picks them up — not the eager reload)
+- `nr_list_credentials()` → node ids with stored credentials, field **names** only (never values)
+- `nr_delete_credentials(node_id, missing_ok=)` → remove a node's credential entry
+
+The `credentialSecret` is read transiently from `settings.js` (fallback `.config.runtime.json`) at call time and never stored in pairflow config or logs. The cred file path follows Node-RED's own rule: `user_dir + <flows-basename>_cred.json` (NOT next to the flows file — see `config.NodeRedConfig.effective_credentials_file`).
+
 ### Tier 2 — Verification
 
 The primitives that close the "did it work?" loop.
